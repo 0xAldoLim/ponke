@@ -2,6 +2,7 @@ import asyncio
 import io
 import time
 from collections import defaultdict, deque
+from contextlib import suppress
 from uuid import uuid4
 
 import structlog
@@ -109,9 +110,15 @@ class Gateway:
                     unique_id = attachment.file_unique_id
                 elif not text:
                     raise Clarification("Please send text or a receipt image.")
-                reply = await self.orchestrator.handle(
-                    user_id, f"{message.chat_id}:{message.message_id}", text, image, unique_id
-                )
+                progress = asyncio.create_task(self.show_progress(user_id))
+                try:
+                    reply = await self.orchestrator.handle(
+                        user_id, f"{message.chat_id}:{message.message_id}", text, image, unique_id
+                    )
+                finally:
+                    progress.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await progress
                 await self.deliver(user_id, reply)
             except Clarification as exc:
                 await self.send(user_id, str(exc))
@@ -122,6 +129,18 @@ class Gateway:
                 )
             finally:
                 log.info("request_finished", latency_ms=round((time.monotonic() - started) * 1000))
+
+    async def show_progress(self, user_id):
+        elapsed = 0
+        while True:
+            try:
+                await self.application.bot.send_chat_action(chat_id=user_id, action="typing")
+                if elapsed == 12:
+                    await self.send(user_id, "I'm still working on this. Give me a moment.")
+            except Exception:
+                return  # A progress update must never prevent the actual answer.
+            await asyncio.sleep(4)
+            elapsed += 4
 
     async def callback(self, update, context):
         if not self.authorized(update):

@@ -153,7 +153,7 @@ async def export_finance(db, user_id, format="xlsx", timezone="Asia/Jakarta"):
                 d.user_question,
                 d.decision_type,
                 d.final_recommendation["recommended_action"],
-                d.final_confidence,
+                d.final_confidence or "",
                 d.status,
             ]
             for d in decisions

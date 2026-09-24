@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.config import Settings
 from app.database import Base, make_database
 from app.orchestrator import Orchestrator
-from app.schemas import Answer, Entities, IntentResult, Opinion, ReceiptData, Verdict
+from app.schemas import Answer, DecisionSynthesis, Entities, IntentResult, ReceiptData, SpecialistView
 
 
 @pytest.fixture(autouse=True)
@@ -53,37 +53,25 @@ class FakeModel:
             return self.intent
         if schema is ReceiptData:
             return self.receipt
-        if schema is Opinion:
-            return Opinion(
+        if schema is SpecialistView:
+            return SpecialistView(
                 position="conditional",
-                confidence=70,
-                score=60,
                 key_argument="Liquidity is unknown.",
-                upside=["Useful upgrade"],
-                downside=["Opportunity cost"],
-                assumptions=["No urgent failure"],
                 risks=["Unknown reserves"],
                 missing_information=["Monthly income"],
-                what_would_change_my_mind=["Evidence of sufficient reserves"],
                 recommended_action="Wait for data",
-                strongest_opposing_argument="Utility may be high" if data["round_1"] else None,
-                overlooked_information=["Urgency"] if data["round_1"] else [],
-                changed_position=False,
             )
-        if schema is Verdict:
-            return Verdict(
-                decision_type="purchase",
+        if schema is DecisionSynthesis:
+            single_specialist = "Act only as this functional specialist" in instruction
+            return DecisionSynthesis(
+                decision_type="health" if single_specialist else "purchase",
                 decision="NEED INFORMATION",
-                confidence=70,
-                weights={"macro": 10, "risk": 30, "lifestyle": 50, "health": 10},
-                relevance_explanation="Purchase utility and affordability dominate.",
                 recommended_action="Confirm your reserves before buying.",
-                reasons=["Liquidity unknown"],
-                facts=[],
-                assumptions=["No urgent failure"],
-                main_disagreement="Utility versus unknown reserves",
+                common_ground="Affordability needs to be clear before you decide.",
+                main_disagreement=""
+                if single_specialist
+                else "Utility may justify the cost, but reserves are unknown.",
                 missing_evidence=["Current balances"],
-                what_would_change=["Sufficient reserve data"],
             )
         return Answer(text="Based on recorded data only.")
 

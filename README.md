@@ -91,7 +91,7 @@ GEMINI_FAST_MODEL=
 GEMINI_REQUESTS_PER_MINUTE=8
 ```
 
-Gemini 3.5 Flash-Lite supports image inputs and structured JSON output, and Google lists its standard API usage as free within your project's [active rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). If its model is unavailable for your project or region, choose another free-tier model with both capabilities in AI Studio and update `GEMINI_PRIMARY_MODEL`. Ponke spaces requests for the configured per-minute rate and retries temporary limit errors. The two-round council makes nine model calls, so it can take over a minute on the free tier. A daily quota or provider outage returns a clear retry message. Check your actual limits in AI Studio; they vary by account.
+Gemini 3.5 Flash-Lite supports image inputs and structured JSON output, and Google lists its standard API usage as free within your project's [active rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). If its model is unavailable for your project or region, choose another free-tier model with both capabilities in AI Studio and update `GEMINI_PRIMARY_MODEL`. Ponke spaces requests for the configured per-minute rate and retries temporary limit errors. A single-domain decision uses one specialist call after routing; a mixed decision uses two specialists and one synthesis call. A daily quota or provider outage returns a clear retry message. Check your actual limits in AI Studio; they vary by account.
 
 Google's [pricing table](https://ai.google.dev/gemini-api/docs/pricing) says Free Tier data may be used to improve its products. Ponke sends the task's bounded context and receipt image to Gemini; do not send sensitive records unless you accept those terms. Ponke sets `store=false` on each [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview) request, which opts out of interaction history storage but does not override the Free Tier data-use terms.
 
@@ -169,7 +169,7 @@ After you supply credentials, run these live checks with small test entries:
 | D | Send a receipt, then send it again. | First logs; duplicate asks before adding; Cancel keeps one entry. |
 | E | How much did I spend on food this month? | Database total includes C and eligible D, excludes other categories. |
 | F | Export my finances. | Telegram receives a valid workbook with eight sheets; CSV also works. |
-| G | Should I spend Rp12m on a new PC? | Two-round council output, missing evidence called out, persisted decision. |
+| G | Should I spend Rp12m on a new PC? | Lifestyle and risk views synthesized briefly, missing evidence called out, persisted decision. |
 | H | What did the council previously say about buying a PC? | Matching stored advice; “details” retrieves specialist summaries. |
 | I | What's my schedule tomorrow? | Correct local dates and Asia/Jakarta times. |
 
@@ -183,11 +183,11 @@ Telegram private chat → allowlist/rate limit → structured intent → typed s
   ├─ PostgreSQL reminders → durable delivery outbox → Telegram
   ├─ expenses / receipts / merchant rules → decimal analytics → XLSX/CSV
   ├─ holdings / reported trades / manual prices / reported liabilities
-  ├─ council: 4 independent → 4 rebuttals → Chief Analyst → decision memory
+  ├─ relevant specialist(s) → synthesis when needed → decision memory
   └─ bounded conversation context / explicit preferences / analyst / briefings
 ```
 
-Modules are in `app/`; the orchestrator calls explicit validated Python functions, never model-generated SQL or shell. SQLAlchemy scopes reads and writes by the authenticated Telegram ID. Council specialists receive identical factual context independently in round one. Their second-round summaries and the judge's contextual weights are persisted; scores are not mechanically averaged. Outcome data supports later calibration, but no automatic weighting is active.
+Modules are in `app/`; the orchestrator calls explicit validated Python functions, never model-generated SQL or shell. SQLAlchemy scopes reads and writes by the authenticated Telegram ID. The council selects only relevant specialists: health alone for health decisions, macro and risk for investments, lifestyle and risk for purchases and career choices. Two selected specialists receive identical factual context independently, then a final synthesis compares their arguments. Single-domain health decisions use one specialist response. The reply gives the recommendation, shared ground, meaningful disagreement and critical missing evidence in natural prose. New council calls do not request numerical specialist scores or weights. Legacy numeric database columns remain for compatibility and store zero as a sentinel for new decisions; exports leave unscored confidence blank.
 
 Financial amounts use `Decimal` and database `NUMERIC`. Totals, category spending, cash flow, savings rate, recorded-month averages, repeated-charge candidates, holding values, allocation and reported net worth are computed in code. FX is not inferred. Bank/cash/e-wallet balances are user-reconciled snapshots; expense logging does not silently rewrite a snapshot with unknown coverage. Investment-account balance snapshots are excluded from cash totals to avoid double-counting holdings. Reported net worth subtracts recorded liability-account balances; incomplete coverage is always explicit.
 
@@ -195,7 +195,7 @@ Receipt files are validated, decoded/re-encoded without metadata and sent to the
 
 Conversation retrieval is at most eight entries from seven days. Older entries are pruned when that user next talks to Ponke. Structured preferences, transactions and decisions remain until deliberately managed. Relevant aggregates are retrieved for analysis; the whole database is never sent to the model. Plain Telegram responses avoid Markdown injection; spreadsheet exports escape formula-looking text.
 
-Ponke's Telegram voice is warm, direct and concise, and follows the user's language and level of formality. Fixed status messages are softened only when delivered; saved replies, facts, identifiers, dates, amounts, confirmations and council decisions retain their original meaning. The response style instruction applies only to final, user-facing model answers, not intent routing or specialist deliberation.
+Ponke's Telegram voice is warm, direct and concise, and follows the user's language and level of formality. Fixed status messages are softened only when delivered; saved replies, facts, identifiers, dates and amounts retain their meaning. Longer requests show typing progress and one brief status message so the user knows Ponke is still working. The response style instruction applies only to final, user-facing model answers, not intent routing or specialist deliberation.
 
 Reminders use one row plus RFC5545 daily/weekly/monthly/yearly recurrence. The scheduler produces at most one overdue occurrence per reminder after downtime and advances from the original recurrence, preserving local wall-clock time. Outbox entries persist through restart and retry delivery with backoff. Telegram has no client idempotency key: a crash after Telegram accepted a message but before the database marked it sent can produce a duplicate notification. This is **at-least-once**, not exactly-once delivery.
 
@@ -258,7 +258,7 @@ A database dump without the encryption key cannot recover Google tokens; reconne
 - Receipt duplicate matching is heuristic. Separate purchases can match; a confirmed override is available. Poor receipts need explicit correction.
 - A crash mid-request may leave an inbound request marked processing or an action outcome uncertain. Ponke avoids blind replay; inspect records before a new request. Durable conversational response delivery and automated recovery are recommended next.
 - Export loads a user's records into memory; intended for personal-scale data, not multi-million-row ledgers. Excel recalculates formulas when opened; Python does not calculate Excel's formula cache.
-- No automated specialist usefulness scores on tiny samples. Outcomes are stored and informational summaries are available; a properly evaluated calibration system is future work.
+- No automated specialist usefulness scores on tiny samples. Outcomes are stored and informational summaries are available; a properly evaluated calibration system is future work. Legacy numeric council fields are kept for compatibility but new council calls do not generate scores.
 
 Recommended next: recurring-merchant review UI, cash reconciliation, dated FX/market providers, liabilities maturity tracking, stronger receipt similarity indexing, durable inbound/reply queue, user-specific preferences for timezone/briefing, provider-health alerts and a representative live evaluation set.
 

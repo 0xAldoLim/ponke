@@ -144,6 +144,7 @@ class Verdict(Strict):
     weights: Weights
     relevance_explanation: str
     recommended_action: str
+    common_ground: str = ""
     reasons: list[str]
     facts: list[str]
     assumptions: list[str]
@@ -154,3 +155,20 @@ class Verdict(Strict):
 
 class Answer(Strict):
     text: str = Field(max_length=10000)
+
+
+class SpecialistView(Strict):
+    position: Literal["support", "oppose", "neutral", "conditional"]
+    key_argument: str
+    risks: list[str]
+    missing_information: list[str]
+    recommended_action: str
+
+
+class DecisionSynthesis(Strict):
+    decision_type: str
+    decision: Literal["PROCEED", "WAIT", "AVOID", "CONDITIONAL", "NEED INFORMATION"]
+    recommended_action: str
+    common_ground: str
+    main_disagreement: str
+    missing_evidence: list[str]

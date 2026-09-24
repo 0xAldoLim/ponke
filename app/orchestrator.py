@@ -302,11 +302,15 @@ class Orchestrator:
             async with self.sessions() as db:
                 context = await financial_context(db, user_id, self.settings)
                 context["preferences"] = await retrieve(db, user_id, "preference.")
-            result = await self.council.run(text, context)
+            result = await self.council.run(
+                text,
+                context,
+                e.decision_type or ("investment" if kind == "finance.investment_analysis" else None),
+            )
             async with self.sessions.begin() as db:
                 await self.council.persist(db, user_id, text, context, result)
                 db.add(Activity(user_id=user_id, kind=kind, reference=source))
-            return Reply(render_verdict(result[0], result[2]))
+            return Reply(render_verdict(result[0]))
         async with self.sessions.begin() as db:
             if kind == "finance.log_expense":
                 transaction = await add_transaction(

@@ -40,30 +40,6 @@ def present_reply(text: str) -> str:
     if text in exact:
         return exact[text]
 
-    if text.startswith("DECISION: "):
-        first_line, separator, rest = text.partition("\n")
-        decision = first_line.removeprefix("DECISION: ")
-        spoken = {
-            "PROCEED": "I'd proceed.",
-            "WAIT": "I'd wait for now.",
-            "AVOID": "I'd avoid it.",
-            "CONDITIONAL": "It depends on a few conditions.",
-            "NEED INFORMATION": "I need more information before deciding.",
-        }.get(decision)
-        if spoken is None:
-            return text
-        return (
-            ("My take: " + spoken + separator + rest)
-            .replace("\n\nWhy:\n", "\n\nHere's why:\n", 1)
-            .replace("\n\nCouncil:\n", "\n\nHow the specialists saw it:\n", 1)
-            .replace("\n\nMain disagreement:\n", "\n\nWhere they differed:\n", 1)
-            .replace("\n\nWhat would change this:\n", "\n\nWhat could change this:\n", 1)
-            .replace(
-                "\n\nSend “details” for the full argument summaries.",
-                "\n\nWant the full reasoning? Send “details”.",
-                1,
-            )
-        )
     if text.startswith("GOOD MORNING\n"):
         _, _, dated = text.partition("\n")
         day, separator, rest = dated.partition("\n")

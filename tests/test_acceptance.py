@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 
 from app.database import AgentOpinion, Decision, Delivery, Reminder, Transaction
 from app.reminders import SchedulerWorker
-from app.schemas import Opinion, Verdict
+from app.schemas import DecisionSynthesis, SpecialistView
 
 
 async def test_A_reminder_and_delivery(env, future):
@@ -114,17 +114,21 @@ async def test_G_council_rounds_persistence(env):
     _, sessions, model, _, service = env
     model.route("decision.request", decision_type="purchase")
     reply = await service.handle(123, "g", "Should I spend Rp12m on a new PC?")
-    assert "DECISION: NEED INFORMATION" in reply.text
-    calls = [c for c in model.calls if c[0] is Opinion]
-    assert len(calls) == 8
-    assert all(call[2]["round_1"] is None for call in calls[:4])
-    assert all(len(call[2]["round_1"]) == 4 for call in calls[4:])
-    assert len([c for c in model.calls if c[0] is Verdict]) == 1
+    assert "Confirm your reserves before buying." in reply.text
+    assert "Affordability needs to be clear" in reply.text
+    assert "Utility may justify" in reply.text
+    assert "Confidence:" not in reply.text and "Council:" not in reply.text
+    calls = [c for c in model.calls if c[0] is SpecialistView]
+    assert len(calls) == 2
+    assert len([c for c in model.calls if c[0] is DecisionSynthesis]) == 1
     async with sessions() as db:
-        assert await db.scalar(select(func.count()).select_from(AgentOpinion)) == 8
+        assert await db.scalar(select(func.count()).select_from(AgentOpinion)) == 2
         decision = await db.scalar(select(Decision))
         assert "this_month" in decision.context_snapshot
-        assert decision.final_recommendation["weights"]["lifestyle"] == 50
+        assert (
+            decision.final_recommendation["common_ground"]
+            == "Affordability needs to be clear before you decide."
+        )
 
 
 async def test_H_decision_retrieval(env):

@@ -1,11 +1,12 @@
 import asyncio
 import json
+import re
 
 import structlog
 from sqlalchemy import select
 
 from app.database import AgentOpinion, Decision, DecisionOutcome
-from app.schemas import Opinion, Verdict
+from app.schemas import DecisionSynthesis, SpecialistView
 from app.validation import Clarification
 
 log = structlog.get_logger()
@@ -21,50 +22,103 @@ LABELS = {
     "lifestyle": "Lifestyle Utility",
     "health": "Health Reality",
 }
+ROLE_SETS = {
+    "health": ("health",),
+    "investment": ("macro", "risk"),
+    "purchase": ("lifestyle", "risk"),
+    "career": ("lifestyle", "risk"),
+    "other": ("lifestyle", "risk"),
+}
+
+
+def relevant_roles(decision_type, question):
+    if decision_type == "health":
+        return ROLE_SETS["health"]
+    if decision_type == "investment":
+        return ROLE_SETS["investment"]
+    topic = question.casefold()
+    if re.search(
+        r"\b(?:crypto|cryptocurrency|bitcoin|btc|invest(?:ing|ment|ments)?|economy|economic|markets?|stocks?|shares?)\b",
+        topic,
+    ):
+        return ROLE_SETS["investment"]
+    if decision_type in ROLE_SETS and decision_type != "other":
+        return ROLE_SETS[decision_type]
+    if re.search(r"\b(?:health|medical|symptoms?|supplements?|sleep)\b", topic):
+        return ROLE_SETS["health"]
+    return ROLE_SETS["other"]
 
 
 class Council:
     def __init__(self, model):
         self.model = model
 
-    async def run(self, question, context):
-        async def specialist(role, prior=None):
-            log.info("agent_invoked", agent=role, round=2 if prior else 1)
+    async def run(self, question, context, decision_type=None):
+        roles = relevant_roles(decision_type, question)
+
+        if len(roles) == 1:
+            role = roles[0]
+            log.info("agent_invoked", agent=role, round=1)
+            verdict = await self.model.structured(
+                DecisionSynthesis,
+                "Act only as this functional specialist: "
+                + ROLES[role]
+                + " Give a careful, concise decision from the supplied evidence. "
+                "Do not imply other specialists were consulted. Do not output numerical scores in prose. "
+                "Write recommended_action as Ponke speaking directly to the user in one or two short "
+                "natural sentences. Set common_ground empty. "
+                "Set main_disagreement to an empty string because only one specialist is relevant. "
+                "Name critical missing evidence; do not invent current prices or medical facts.",
+                {"question": question, "context": context},
+            )
+            return DecisionSynthesis.model_validate(verdict.model_dump()), {}, {}
+
+        async def specialist(role):
+            log.info("agent_invoked", agent=role, round=1)
             instruction = (
                 "Act as the functional specialist "
                 + ROLES[role]
                 + " You are not a real person or an impersonation. Return concise argument summaries. "
                 "Use only supplied facts; missing information must constrain confidence. "
+                "Analyze independently. Give your strongest argument and the main risks."
             )
-            if prior is not None:
-                instruction += (
-                    "Round 2: independently review ALL round 1 opinions. Identify the strongest opposing "
-                    "argument, overlooked information, whether your position changed, and update confidence and action."
-                )
-            else:
-                instruction += "Round 1: analyze independently. Set strongest_opposing_argument null and changed_position false."
             result = await self.model.structured(
-                Opinion, instruction, {"question": question, "context": context, "round_1": prior}
+                SpecialistView, instruction, {"question": question, "context": context}
             )
-            return Opinion.model_validate(result.model_dump())
+            return SpecialistView.model_validate(result.model_dump())
 
-        first_values = await asyncio.gather(*(specialist(role) for role in ROLES))
-        first = {role: opinion.model_dump() for role, opinion in zip(ROLES, first_values, strict=True)}
-        second_values = await asyncio.gather(*(specialist(role, first) for role in ROLES))
-        second = {role: opinion.model_dump() for role, opinion in zip(ROLES, second_values, strict=True)}
+        first_values = await asyncio.gather(*(specialist(role) for role in roles))
+        first = {role: opinion.model_dump() for role, opinion in zip(roles, first_values, strict=True)}
         log.info("agent_invoked", agent="chief_analyst")
         verdict = await self.model.structured(
-            Verdict,
-            "Act as Chief Analyst. Synthesize the two specialist rounds without simply averaging scores. "
-            "Determine decision type and context-dependent relevance weights summing to 100. "
-            "Investment should emphasize risk and macro; purchases utility and affordability; medical decisions health. "
-            "Evaluate evidence quality and disagreement. Separate facts, assumptions, missing evidence. "
-            "Unknown liquidity, debt or current evidence must prevent claims of affordability or current market opportunity. "
-            "Use NEED INFORMATION when critical evidence is missing. No historical automatic weight adjustment.",
-            {"question": question, "context": context, "round_1": first, "round_2": second},
+            DecisionSynthesis,
+            "Act as Chief Analyst. Synthesize only the selected specialists' arguments. "
+            "Compare evidence, assumptions and practical consequences. "
+            "Write as Ponke speaking directly to the user in plain, concise language. "
+            "Keep the total reply under about 75 words. Answer the question first in recommended_action. "
+            "In common_ground, give one short point "
+            "supported by both arguments. In main_disagreement, contrast the strongest upside and "
+            "risk arguments only if they genuinely differ; otherwise leave it empty. "
+            "Avoid report language such as 'the user', 'the macro specialist', 'both specialists', "
+            "'perspectives', 'parameters', 'fully defined', headings or numbered scores. "
+            "Do not refer to the people or process behind the analysis; say 'the upside' or 'the risk' instead. "
+            "Do not repeat the same point. A natural style sounds like: "
+            "'That could work if it fits your budget. The upside is real, but the downside could hurt. "
+            "I'd want to know your timeline before saying yes.' "
+            "Write missing_evidence as short phrases addressed to the user, such as 'your time horizon' "
+            "or 'your cash buffer', and include only the most decision-relevant gaps. "
+            "For a broad question, give a conditional educational answer instead of requiring a "
+            "personalized yes/no. Use NEED INFORMATION only when a personalized decision cannot be "
+            "made responsibly from the supplied evidence. "
+            "Do not invent disagreement or consensus. "
+            "Separate facts, assumptions and missing evidence. "
+            "Unknown liquidity or debt must prevent a personalized affordability claim. "
+            "Do not claim to know current market prices or conditions without supplied evidence. "
+            "Use NEED INFORMATION when critical evidence is missing.",
+            {"question": question, "context": context, "arguments": list(first.values())},
         )
-        verdict = Verdict.model_validate(verdict.model_dump())
-        return verdict, first, second
+        verdict = DecisionSynthesis.model_validate(verdict.model_dump())
+        return verdict, first, {}
 
     async def persist(self, db, user_id, question, context, result):
         verdict, first, second = result
@@ -74,7 +128,7 @@ class Council:
             decision_type=verdict.decision_type,
             context_snapshot=json.loads(json.dumps(context, default=str)),
             final_recommendation=verdict.model_dump(),
-            final_confidence=verdict.confidence,
+            final_confidence=0,  # Legacy non-null column; no numerical confidence is inferred.
         )
         db.add(decision)
         await db.flush()
@@ -86,8 +140,8 @@ class Council:
                         agent_name=role,
                         round=round_number,
                         position=opinion["position"],
-                        confidence=opinion["confidence"],
-                        score=opinion["score"],
+                        confidence=0,
+                        score=0,  # Legacy non-null columns, excluded from new model output.
                         summarized_reasoning=opinion,
                         recommended_action=opinion["recommended_action"],
                     )
@@ -95,21 +149,27 @@ class Council:
         return decision
 
 
-def render_verdict(verdict, second=None):
+def render_verdict(verdict):
     if isinstance(verdict, dict):
-        verdict = Verdict.model_validate(verdict)
-    text = f"DECISION: {verdict.decision}\nConfidence: {verdict.confidence}/100\n\n{verdict.recommended_action}\n\nWhy:\n"
-    text += "\n".join("• " + reason for reason in verdict.reasons[:4])
-    if second:
-        text += "\n\nCouncil:\n" + "\n".join(
-            f"{LABELS[role]}: {opinion['score']}/100 ({opinion['position']})"
-            for role, opinion in second.items()
+        fields = {key: verdict[key] for key in DecisionSynthesis.model_fields if key in verdict}
+        fields.setdefault("common_ground", "")  # Existing decisions predate the new reply field.
+        verdict = DecisionSynthesis.model_validate(fields)
+    parts = [verdict.recommended_action.strip()]
+    common = verdict.common_ground.strip()
+    if common and common.casefold() not in parts[0].casefold():
+        parts.append(common)
+    disagreement = verdict.main_disagreement.strip()
+    if disagreement and disagreement.casefold() not in {"none", "no disagreement", "n/a"}:
+        parts.append(disagreement)
+    if verdict.decision == "NEED INFORMATION" and verdict.missing_evidence:
+        missing = ", ".join(
+            item.strip().removeprefix("User's ").removeprefix("user's ")
+            for item in verdict.missing_evidence[:2]
         )
-    text += "\n\nMain disagreement:\n" + verdict.main_disagreement
-    text += "\n\nWhat would change this:\n" + "\n".join("• " + item for item in verdict.what_would_change[:3])
-    if verdict.missing_evidence:
-        text += "\n\nMissing evidence: " + "; ".join(verdict.missing_evidence[:3])
-    return text + "\n\nSend “details” for the full argument summaries."
+        missing = missing[:1].lower() + missing[1:]
+        if missing.casefold() not in " ".join(parts).casefold():
+            parts.append("I'd need " + missing + " to make this more specific.")
+    return " ".join(part for part in parts if part)
 
 
 async def history(db, user_id, search=None, details=False):
@@ -122,15 +182,13 @@ async def history(db, user_id, search=None, details=False):
     if details:
         decision = decisions[0]
         opinions = (
-            await db.scalars(
-                select(AgentOpinion).where(AgentOpinion.decision_id == decision.id, AgentOpinion.round == 2)
-            )
+            await db.scalars(select(AgentOpinion).where(AgentOpinion.decision_id == decision.id))
         ).all()
+        latest = {opinion.agent_name: opinion for opinion in sorted(opinions, key=lambda item: item.round)}
         text = render_verdict(decision.final_recommendation)
-        text += "\n\nRelevance: " + decision.final_recommendation["relevance_explanation"]
-        for opinion in opinions:
+        for opinion in latest.values():
             text += (
-                f"\n\n{LABELS[opinion.agent_name]}\n{opinion.summarized_reasoning['key_argument']}\nRisks: "
+                f"\n\n{LABELS[opinion.agent_name]}: {opinion.summarized_reasoning['key_argument']}\nRisks: "
                 + "; ".join(opinion.summarized_reasoning["risks"])
             )
         return text
