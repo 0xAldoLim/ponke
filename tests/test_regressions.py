@@ -90,3 +90,19 @@ async def test_bulk_delete_only_reviewed_records(env):
     async with sessions() as db:
         remaining = (await db.scalars(select(Transaction))).all()
         assert len(remaining) == 1 and remaining[0].amount == 20000
+
+
+async def test_personal_analyst_reports_confirmed_calendar_activity(env, future):
+    _, _, model, _, service = env
+    model.route(
+        "calendar.create",
+        title="Gym",
+        start=future.isoformat(),
+        end=(future + timedelta(hours=1)).isoformat(),
+    )
+    created = await service.handle(123, "calendar-analyst", "Gym tomorrow.")
+    assert created.text.startswith("Created:")
+    model.route("personal_analysis")
+    report = await service.handle(123, "analyst", "Analyze my recent activity.")
+    assert "1 calendar change was made through Ponke" in report.text
+    assert "directly in Google Calendar are not counted" in report.text

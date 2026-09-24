@@ -3,9 +3,11 @@
 ## Gemini Free Tier update — 24 September 2026
 
 - Ruff lint and formatting checks passed for the updated tree.
-- Docker-based Python 3.12 test run against the mounted working tree: **73 passed, 1 skipped**. The skipped check requires a disposable PostgreSQL test database; this run used the default SQLite fixture.
-- Mock HTTP transport verified Gemini Interactions request shape, image input, JSON response validation, temporary-limit retry, and provider-specific key requirements. No live Gemini key was available, so actual model access and extraction accuracy remain to be checked with the user's credentials.
-- A fresh production Docker build stopped during pinned dependency download because PyPI timed out. The previous production image supplied the test environment; this update's fresh image build remains unverified.
+- Docker-based Python 3.12 run against a separate migrated PostgreSQL test database: **75 passed**. Test settings now ignore live application environment variables, so local credentials and timezone cannot change acceptance assertions.
+- Mock HTTP transport verified Gemini Interactions request shape, image input, JSON response validation, temporary-limit retry, and provider-specific key requirements. Real receipt extraction accuracy remains unmeasured.
+- A current production Docker image built successfully, and the local app and database both passed health checks. A prior build attempt hit a temporary PyPI read timeout; a retry completed.
+- With user-provided credentials kept outside Git, Telegram `getMe` identified the configured bot and Google confirmed model access. Live Gemini structured output and a harmless reminder intent succeeded. A synthetic Decision Council run completed four independent first-round opinions, four second-round opinions, and a Chief Analyst verdict. No personal financial payload was used for these live model checks.
+- Google Calendar OAuth has not been configured. Real receipt extraction, natural-language financial interpretation, Telegram delivery timing and Calendar A/I workflows still need user-driven live acceptance checks.
 
 Verification date: 14 September 2026.
 

@@ -490,6 +490,8 @@ class Orchestrator:
                     + ("Conflicts:\n" + self.events_text(conflicts) if conflicts else "Please confirm."),
                 )
             event = await self.calendar.create_event(user_id, e.title, start, end, source)
+            async with self.sessions.begin() as db:
+                db.add(Activity(user_id=user_id, kind="calendar.create", reference=source))
             return Reply("Created: " + self.events_text([event]))
         event = None
         if e.target_id:
@@ -524,6 +526,8 @@ class Orchestrator:
             )
         if kind == "calendar.delete":
             await self.calendar.delete_event(user_id, event["id"])
+            async with self.sessions.begin() as db:
+                db.add(Activity(user_id=user_id, kind="calendar.delete", reference=source))
             return Reply("Deleted: " + event.get("summary", "event"))
         if not e.start or not e.end:
             raise Clarification("Please specify the new start and end time.")
@@ -546,6 +550,8 @@ class Orchestrator:
         changed = await self.calendar.update_event(
             user_id, event["id"], e.title, start, end, event.get("etag", "*")
         )
+        async with self.sessions.begin() as db:
+            db.add(Activity(user_id=user_id, kind="calendar.modify", reference=source))
         return Reply("Updated: " + self.events_text([changed]))
 
     async def process_receipt(self, user_id, source, text, image, file_id):

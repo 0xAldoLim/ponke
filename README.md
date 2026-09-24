@@ -50,6 +50,8 @@ Paste the generated key into `APP_SECRET_KEY` in `.env`. This key encrypts Googl
 
 Fill in the Telegram and Gemini credentials below. Choose a strong alphanumeric `POSTGRES_PASSWORD` and put the same password in `DATABASE_URL`. The Compose database hostname is `db`. If the password contains URL-reserved characters, percent-encode it in `DATABASE_URL` only.
 
+If another local service uses port 8000, set `PONKE_HOST_PORT=8001` and `GOOGLE_REDIRECT_URI=http://localhost:8001/oauth/google/callback` in `.env`. Register that exact callback in Google Cloud if you connect Calendar. The container still listens on port 8000.
+
 ```powershell
 docker compose up -d --build
 docker compose ps

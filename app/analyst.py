@@ -2,7 +2,7 @@ from datetime import timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.database import Activity, DecisionOutcome, Memory, utcnow
 from app.finance import financial_context, month_range, summary
@@ -33,6 +33,32 @@ def evidence_insights(context):
 async def personal_analysis(db, user_id, settings):
     context = await financial_context(db, user_id, settings)
     lines = evidence_insights(context)
+    activity_counts = dict(
+        (
+            await db.execute(
+                select(Activity.kind, func.count())
+                .where(
+                    Activity.user_id == user_id,
+                    Activity.created_at >= utcnow() - timedelta(days=30),
+                )
+                .group_by(Activity.kind)
+            )
+        ).all()
+    )
+    calendar_actions = sum(
+        activity_counts.get(kind, 0) for kind in ("calendar.create", "calendar.modify", "calendar.delete")
+    )
+    if calendar_actions:
+        grammar = "change was" if calendar_actions == 1 else "changes were"
+        lines.append(
+            f"FACT: {calendar_actions} calendar {grammar} made through Ponke in the last 30 days; changes made directly in Google Calendar are not counted."
+        )
+    if trades := activity_counts.get("portfolio.trade", 0):
+        lines.append(
+            f"FACT: {trades} user-reported investment trades were recorded in the last 30 days; Ponke did not place them."
+        )
+    if questions := activity_counts.get("general_question", 0):
+        lines.append(f"FACT: You asked Ponke {questions} general questions in the last 30 days.")
     outcomes = (
         await db.scalars(
             select(DecisionOutcome)

@@ -71,6 +71,8 @@ DEFAULT_CURRENCY=IDR
 
 Choose your own timezone/currency before starting; the example above uses the repository defaults for Indonesia. For Malaysia, use `USER_TIMEZONE=Asia/Kuala_Lumpur` and `DEFAULT_CURRENCY=MYR`. The database password must be identical in both lines. A password containing only letters and digits avoids URL encoding problems. Leave `GEMINI_FAST_MODEL` blank to use Flash-Lite for all calls. Keep the other `.env.example` settings unless you have a reason to change them.
 
+If port 8000 is already in use on your computer, set `PONKE_HOST_PORT=8001` and `GOOGLE_REDIRECT_URI=http://localhost:8001/oauth/google/callback` in `.env`. Register that same redirect URI in Google Cloud if you connect Calendar. Ponke still listens on port 8000 inside its container.
+
 On Linux, restrict file access after editing:
 
 ```sh
