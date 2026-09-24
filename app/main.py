@@ -8,7 +8,7 @@ from sqlalchemy import text
 from app.calendar import GoogleCalendar
 from app.config import Settings
 from app.database import make_database
-from app.llm import OpenAIModel
+from app.llm import create_model
 from app.logging import configure_logging
 from app.orchestrator import Orchestrator
 from app.reminders import SchedulerWorker
@@ -35,7 +35,7 @@ def create_app(settings=None):
             async with sessions() as db:
                 # Production schema must be installed by Alembic, never create_all at startup.
                 await db.execute(text("SELECT id FROM inbound LIMIT 1"))
-            model = OpenAIModel(config)
+            model = create_model(config)
             calendar = GoogleCalendar(config, sessions)
             service = Orchestrator(sessions, config, model, calendar)
             gateway = Gateway(config, service)

@@ -177,7 +177,12 @@ class Orchestrator:
         }
         result = await self.model.structured(IntentResult, ROUTER, data, fast=True)
         result = IntentResult.model_validate(result.model_dump())
-        if result.confidence < 0.8 and self.settings.openai_fast_model:
+        fast_model = (
+            self.settings.gemini_fast_model
+            if self.settings.ai_provider == "gemini"
+            else self.settings.openai_fast_model
+        )
+        if result.confidence < 0.8 and fast_model:
             result = await self.model.structured(IntentResult, ROUTER, data)
         return IntentResult.model_validate(result.model_dump())
 

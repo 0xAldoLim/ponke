@@ -3,6 +3,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from app.config import Settings
@@ -100,3 +101,18 @@ def test_dynamic_weight_validation():
 def test_fail_closed_configuration():
     with pytest.raises(ValueError, match="ALLOWED"):
         Settings(_env_file=None).validate_runtime()
+
+
+def test_runtime_requires_selected_provider_key():
+    base = dict(
+        _env_file=None,
+        allowed_telegram_user_ids="123",
+        telegram_bot_token="fake-telegram-token",
+        app_secret_key=Fernet.generate_key().decode(),
+    )
+    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
+        Settings(**base).validate_runtime()
+    Settings(**base, gemini_api_key="fake-gemini-key").validate_runtime()
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        Settings(**base, ai_provider="openai", gemini_api_key="fake-gemini-key").validate_runtime()
+    Settings(**base, ai_provider="openai", openai_api_key="fake-openai-key").validate_runtime()

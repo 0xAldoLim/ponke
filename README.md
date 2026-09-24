@@ -1,8 +1,8 @@
 # Ponke
 
-A private Telegram chief of staff for reminders, Google Calendar, personal finance, receipts and considered decisions. Python 3.12, FastAPI, PostgreSQL, SQLAlchemy 2 and a configurable OpenAI Responses API model, packaged as one service.
+A private Telegram chief of staff for reminders, Google Calendar, personal finance, receipts and considered decisions. Python 3.12, FastAPI, PostgreSQL, SQLAlchemy 2 and a configurable Gemini or OpenAI model, packaged as one service. Gemini 3.5 Flash-Lite is the default and has a free API tier.
 
-**Start here:** create your credentials, follow the setup below, then run the acceptance checklist. No credentials are bundled, and live Telegram/Google/OpenAI behavior requires your own authorization. The automated tests use controlled API responses rather than claiming that a mock proves live model accuracy.
+**Start here:** create your credentials, follow the setup below, then run the acceptance checklist. No credentials are bundled, and live Telegram/Google/Gemini behavior requires your own authorization. The automated tests use controlled API responses rather than claiming that a mock proves live model accuracy.
 
 For a beginner-friendly setup checklist, including a low-cost VPS path without a domain, see [SETUP_STEP_BY_STEP.md](SETUP_STEP_BY_STEP.md).
 
@@ -48,7 +48,7 @@ On Linux/macOS, use `cp .env.example .env` and `.venv/bin/python` instead of the
 
 Paste the generated key into `APP_SECRET_KEY` in `.env`. This key encrypts Google tokens; retain it securely with your backups. Do not replace it on every restart.
 
-Fill in the Telegram and OpenAI credentials below. Choose a strong alphanumeric `POSTGRES_PASSWORD` and put the same password in `DATABASE_URL`. The Compose database hostname is `db`. If the password contains URL-reserved characters, percent-encode it in `DATABASE_URL` only.
+Fill in the Telegram and Gemini credentials below. Choose a strong alphanumeric `POSTGRES_PASSWORD` and put the same password in `DATABASE_URL`. The Compose database hostname is `db`. If the password contains URL-reserved characters, percent-encode it in `DATABASE_URL` only.
 
 ```powershell
 docker compose up -d --build
@@ -71,21 +71,23 @@ If the ID helper finds no updates, stop the running app, send another message to
 
 Optional shortcuts: `/connect_calendar`, `/export_finance`, `/briefing`, `/reminders`. Normal use is natural language.
 
-## OpenAI setup
+## Gemini free-tier setup
 
-Create an API key in your [OpenAI API project](https://platform.openai.com/api-keys), enable billing and set a project budget. ChatGPT subscription access is separate from API access.
+In [Google AI Studio](https://aistudio.google.com/api-keys), create an API key in a **Free Tier** project. This is separate from the Google Calendar OAuth client. Set:
 
 ```dotenv
-OPENAI_API_KEY=your-project-api-key
-OPENAI_PRIMARY_MODEL=gpt-6-astra
-OPENAI_FAST_MODEL=
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your-gemini-key
+GEMINI_PRIMARY_MODEL=gemini-3.5-flash-lite
+GEMINI_FAST_MODEL=
+GEMINI_REQUESTS_PER_MINUTE=8
 ```
 
-The primary model remains configurable. Choose a fast model available to your project that supports **structured outputs and image inputs**. Leaving it blank uses the primary model for all calls; it does not silently substitute another model. Verify your account's model access before live use. Ponke uses the [Responses structured output interface](https://developers.openai.com/api/docs/guides/structured-outputs) and the requested [GPT-6 Astra model](https://developers.openai.com/api/docs/models/gpt-6-astra).
+Gemini 3.5 Flash-Lite supports image inputs and structured JSON output, and Google lists its standard API usage as free within your project's [active rate limits](https://ai.google.dev/gemini-api/docs/rate-limits). If its model is unavailable for your project or region, choose another free-tier model with both capabilities in AI Studio and update `GEMINI_PRIMARY_MODEL`. Ponke spaces requests for the configured per-minute rate and retries temporary limit errors. The two-round council makes nine model calls, so it can take over a minute on the free tier. A daily quota or provider outage returns a clear retry message. Check your actual limits in AI Studio; they vary by account.
 
-Classification, receipts and simple replies use the fast configuration; complex analysis and council calls use the primary configuration. A council request makes eight specialist calls plus one judge call, in addition to routing. Requests have timeouts and the SDK retries transient failures at most twice. `store=False` disables application-requested response persistence; it does not constitute a zero-retention guarantee from the provider.
+Google's [pricing table](https://ai.google.dev/gemini-api/docs/pricing) says Free Tier data may be used to improve its products. Ponke sends the task's bounded context and receipt image to Gemini; do not send sensitive records unless you accept those terms. Ponke sets `store=false` on each [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview) request, which opts out of interaction history storage but does not override the Free Tier data-use terms.
 
-Optional per-million-token prices in `.env` enable approximate usage cost logs. Unconfigured prices produce token counts without invented cost estimates. Estimates do not account for every provider discount, cache policy or pricing tier.
+If you instead choose OpenAI later, set `AI_PROVIDER=openai`, fill `OPENAI_API_KEY` and `OPENAI_PRIMARY_MODEL`, and optionally set `OPENAI_FAST_MODEL` to a model supporting structured outputs and image inputs. OpenAI calls use the [Responses structured output interface](https://developers.openai.com/api/docs/guides/structured-outputs). OpenAI API billing is separate from ChatGPT. Classification, receipts and simple replies use the fast model; complex analysis and council calls use the primary model. Optional per-million-token OpenAI prices in `.env` enable approximate usage cost logs. Unconfigured prices produce token counts without invented cost estimates.
 
 ## Google Calendar setup
 
@@ -145,7 +147,7 @@ Do not run the local app and Compose app simultaneously. The PostgreSQL advisory
 .\.venv\Scripts\python -m ruff format --check .
 ```
 
-The default suite uses SQLite with foreign keys and mocked APIs, including the actual OpenAI SDK against a mock HTTP transport. It verifies validation, routing, user boundaries, money, timezones/DST, recurrence, transaction persistence, receipts, category corrections, exports, council rounds, decision memory, OAuth encryption/refresh, confirmations and failure handling. It does not estimate live model extraction accuracy.
+The default suite uses SQLite with foreign keys and mocked APIs, including Gemini Interactions request/response tests and the OpenAI SDK against a mock HTTP transport. It verifies validation, routing, user boundaries, money, timezones/DST, recurrence, transaction persistence, receipts, category corrections, exports, council rounds, decision memory, OAuth encryption/refresh, confirmations and failure handling. It does not estimate live model extraction accuracy.
 
 For the same service suite against PostgreSQL, use a **disposable database whose name ends in `_test`**. Apply migrations first, then set `TEST_DATABASE_URL` to that database and run pytest. Fixtures use outer transactions and savepoints to isolate test data. GitHub Actions provisions PostgreSQL 17, runs migrations, migration drift checks, the test suite and a Docker build.
 

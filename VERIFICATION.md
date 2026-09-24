@@ -1,5 +1,12 @@
 # Verification record
 
+## Gemini Free Tier update — 24 September 2026
+
+- Ruff lint and formatting checks passed for the updated tree.
+- Docker-based Python 3.12 test run against the mounted working tree: **73 passed, 1 skipped**. The skipped check requires a disposable PostgreSQL test database; this run used the default SQLite fixture.
+- Mock HTTP transport verified Gemini Interactions request shape, image input, JSON response validation, temporary-limit retry, and provider-specific key requirements. No live Gemini key was available, so actual model access and extraction accuracy remain to be checked with the user's credentials.
+- A fresh production Docker build stopped during pinned dependency download because PyPI timed out. The previous production image supplied the test environment; this update's fresh image build remains unverified.
+
 Verification date: 14 September 2026.
 
 ## Executed locally

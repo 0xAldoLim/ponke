@@ -1,4 +1,5 @@
 from decimal import Decimal
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
@@ -12,6 +13,11 @@ class Settings(BaseSettings):
     app_secret_key: SecretStr = SecretStr("")
     telegram_bot_token: SecretStr = SecretStr("")
     allowed_telegram_user_ids: str = ""
+    ai_provider: Literal["gemini", "openai"] = "gemini"
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_primary_model: str = "gemini-3.5-flash-lite"
+    gemini_fast_model: str = ""
+    gemini_requests_per_minute: int = 8
     openai_api_key: SecretStr = SecretStr("")
     openai_primary_model: str = "gpt-6-astra"
     openai_fast_model: str = ""
@@ -61,7 +67,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_limits(self):
-        if self.requests_per_minute < 1 or not 1 <= self.max_upload_bytes <= 20_000_000:
+        if (
+            self.requests_per_minute < 1
+            or not 1 <= self.gemini_requests_per_minute <= 60
+            or not 1 <= self.max_upload_bytes <= 20_000_000
+        ):
             raise ValueError("Invalid rate or upload limit")
         return self
 
@@ -72,9 +82,12 @@ class Settings(BaseSettings):
     def validate_runtime(self):
         if not self.allowed_ids:
             raise ValueError("ALLOWED_TELEGRAM_USER_IDS must not be empty")
-        for field in ("telegram_bot_token", "openai_api_key", "app_secret_key"):
+        for field in ("telegram_bot_token", "app_secret_key"):
             if not getattr(self, field).get_secret_value():
                 raise ValueError(f"Missing {field.upper()}")
+        provider_key = "gemini_api_key" if self.ai_provider == "gemini" else "openai_api_key"
+        if not getattr(self, provider_key).get_secret_value():
+            raise ValueError(f"Missing {provider_key.upper()}")
         Fernet(self.app_secret_key.get_secret_value().encode())
         if self.app_env == "production" and not self.database_url.get_secret_value().startswith(
             "postgresql+"
