@@ -24,6 +24,7 @@ from app.receipts import duplicate_receipt, extract_receipt
 from app.reminders import change_reminder, create_reminder
 from app.schemas import Answer, Entities, IntentResult, ReceiptData
 from app.validation import Clarification, aware, cash, money, parse_datetime
+from app.voice import ANSWER_VOICE
 
 log = structlog.get_logger()
 
@@ -327,7 +328,8 @@ class Orchestrator:
                     "Explain the requested finance analysis concisely from the supplied deterministic calculations. "
                     "Never perform new arithmetic or invent balances. Only cite numerical values present in data. "
                     "Unknown balances and incomplete net worth must be acknowledged. Mark inferred patterns POSSIBLE PATTERN. "
-                    "If the request is a simple category total, reply with one short sentence.",
+                    "If the request is a simple category total, reply with one short sentence. "
+                    + ANSWER_VOICE,
                     {"question": text, "query_result": result, "financial_context": context},
                     fast=False,
                 )
@@ -445,7 +447,8 @@ class Orchestrator:
                 answer = await self.model.structured(
                     Answer,
                     "Answer concisely. No live browsing is connected: do not assert current prices, news, medical or legal facts. "
-                    "For time-sensitive factual requests explain what evidence is needed. Do not claim access to tools or data not supplied.",
+                    "For time-sensitive factual requests explain what evidence is needed. Do not claim access to tools or data not supplied. "
+                    + ANSWER_VOICE,
                     {"question": text, "recent_conversation": await conversation_context(db, user_id)},
                     fast=True,
                 )

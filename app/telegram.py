@@ -10,6 +10,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Mess
 
 from app.orchestrator import Reply
 from app.validation import Clarification
+from app.voice import present_reply
 
 log = structlog.get_logger()
 
@@ -58,9 +59,12 @@ class Gateway:
         if not self.authorized(update):
             return
         await update.effective_message.reply_text(
-            "I’m Ponke. Tell me what you need: reminders, calendar events, expenses, receipts, or a decision.\n\n"
-            "Examples: “Spent 48k on coffee using BCA.” “Remind me tomorrow at 8 PM to water the plants.”\n\n"
-            "Send /connect_calendar to connect Google Calendar, /briefing for your briefing, or /export_finance for Excel."
+            "Hey, I'm Ponke. Tell me what you're trying to get done and I'll help you work through it. "
+            "I can keep track of expenses, set reminders, check your calendar, read receipts, "
+            "and help think through decisions.\n\n"
+            "You can say things like “Spent 48k on coffee using BCA” or "
+            "“Remind me tomorrow at 8 PM to water the plants.”\n\n"
+            "For your calendar, use /connect_calendar. You can also ask for /briefing or /export_finance."
         )
 
     async def message(self, update, context):
@@ -142,6 +146,7 @@ class Gateway:
     async def send(self, user_id, text, reminder_id=None, markup=None):
         if user_id not in self.settings.allowed_ids:
             raise PermissionError("Unauthorized delivery")
+        text = present_reply(text)
         if reminder_id:
             markup = InlineKeyboardMarkup(
                 [
