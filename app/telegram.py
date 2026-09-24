@@ -42,6 +42,7 @@ class Gateway:
             .build()
         )
         self.application.add_handler(CommandHandler("start", self.start_command))
+        self.application.add_handler(CommandHandler("id", self.id_command))
         self.application.add_handler(CallbackQueryHandler(self.callback))
         self.application.add_handler(MessageHandler(filters.ALL, self.message))
         self.application.add_error_handler(self.error)
@@ -65,6 +66,14 @@ class Gateway:
             "You can say things like “Spent 48k on coffee using BCA” or "
             "“Remind me tomorrow at 8 PM to water the plants.”\n\n"
             "For your calendar, use /connect_calendar. You can also ask for /briefing or /export_finance."
+        )
+
+    async def id_command(self, update, context):
+        user, chat = update.effective_user, update.effective_chat
+        if not user or not chat or chat.type != "private" or chat.id != user.id:
+            return
+        await update.effective_message.reply_text(
+            f"Your Telegram user ID is {user.id}. The bot owner can add this ID to the allowlist."
         )
 
     async def message(self, update, context):

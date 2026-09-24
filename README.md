@@ -60,16 +60,22 @@ docker compose logs --tail 50 app
 
 Compose waits for PostgreSQL, runs `alembic upgrade head`, then starts one application worker. Readiness is at [localhost:8000/health/ready](http://localhost:8000/health/ready). Telegram uses outbound long polling. There is no Telegram webhook to configure.
 
+### Start automatically on Windows
+
+Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_windows_startup.ps1` once. This installs a shortcut in your own Windows Startup folder. After you sign in, it starts Docker Desktop if needed, waits for Docker, starts the existing Compose stack without rebuilding or replacing the database volume, and writes a result to `%LOCALAPPDATA%\Ponke\startup.log`. You can run `scripts/start_ponke_windows.ps1` manually to check the same path now. Reinstall the shortcut if you move the project directory. Delete the `Ponke.lnk` shortcut from your Startup folder to disable automatic launch.
+
+PostgreSQL data lives in Docker's named `ponke_pgdata` volume. Normal shutdown, reboot, container recreation and `docker compose down` keep that volume. `docker compose down -v` deletes it. Recent conversation context is limited to eight messages from seven days; expenses, reminders, preferences, decisions and other structured records remain in PostgreSQL until explicitly changed or deleted. A backup is still needed against disk loss or a damaged Docker installation.
+
 ## Telegram setup
 
 1. Open the verified [BotFather](https://t.me/BotFather) in Telegram. Send `/newbot`, choose a display name and an available bot username ending in `bot`.
 2. Copy the token into `TELEGRAM_BOT_TOKEN` in `.env`. Do not paste it into a browser address bar or commit it.
-3. Open your new bot and send `/start` **before starting Ponke**.
-4. Run `.\.venv\Scripts\python scripts/telegram_user_id.py`. It calls Telegram using the token from `.env` and prints numeric IDs and usernames, not message contents.
-5. Put your numeric ID in `ALLOWED_TELEGRAM_USER_IDS`. Multiple approved IDs are comma-separated. Each gets separate database records and OAuth tokens; timezone, briefing configuration and calendar ID are deployment-wide.
-6. Start Ponke and send `/start` again. Only allowlisted users in private one-to-one chats are accepted. Group chats, unauthorized users and edited messages do not trigger actions.
+3. Open your new bot and send `/id` to get your numeric Telegram user ID. This command works in a private chat even before your ID is allowed, and reveals only your own ID. To add someone else, ask them to send `/id` to the bot and give you the number.
+4. Alternatively, before Ponke starts, run `.\.venv\Scripts\python scripts/telegram_user_id.py`. It calls Telegram using the token from `.env` and prints numeric IDs and usernames, not message contents.
+5. Put your numeric ID in `ALLOWED_TELEGRAM_USER_IDS`. Multiple approved IDs are comma-separated. Each gets separate database records and OAuth tokens; timezone, briefing configuration, calendar ID and model quota are deployment-wide. Only add people you trust with access to the bot's shared API quota. After editing the allowlist, run `docker compose up -d --force-recreate app` to load it.
+6. Start Ponke and send `/start`. Only allowlisted users in private one-to-one chats can use assistant actions. `/id` is the sole exception for finding one's own ID; group chats and edited messages do not trigger actions.
 
-If the ID helper finds no updates, stop the running app, send another message to the bot and retry. [Telegram's official bot tutorial](https://core.telegram.org/bots/tutorial) explains BotFather and tokens.
+If the ID helper finds no updates, use `/id` in a private bot chat instead. [Telegram's official bot tutorial](https://core.telegram.org/bots/tutorial) explains BotFather and tokens.
 
 Optional shortcuts: `/connect_calendar`, `/export_finance`, `/briefing`, `/reminders`. Normal use is natural language.
 
