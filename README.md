@@ -4,6 +4,8 @@ A private Telegram chief of staff for reminders, Google Calendar, personal finan
 
 **Start here:** create your credentials, follow the setup below, then run the acceptance checklist. No credentials are bundled, and live Telegram/Google/OpenAI behavior requires your own authorization. The automated tests use controlled API responses rather than claiming that a mock proves live model accuracy.
 
+For a beginner-friendly setup checklist, including a low-cost VPS path without a domain, see [SETUP_STEP_BY_STEP.md](SETUP_STEP_BY_STEP.md).
+
 ## What you can say
 
 - “Remind me tomorrow at 8 PM to water the plants.”
