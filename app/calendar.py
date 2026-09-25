@@ -45,7 +45,12 @@ class GoogleCalendar:
                     client_id=self.settings.google_client_id,
                     redirect_uri=self.settings.google_redirect_uri,
                     response_type="code",
-                    scope=SCOPE,
+                    scope=SCOPE
+                    + (
+                        " https://www.googleapis.com/auth/spreadsheets"
+                        if self.settings.google_sheets_enabled
+                        else ""
+                    ),
                     access_type="offline",
                     prompt="consent",
                     state=state,

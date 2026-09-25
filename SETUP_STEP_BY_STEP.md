@@ -166,7 +166,18 @@ If you want to open the Google link directly on your phone, use a domain pointed
 3. Send `Spent IDR 48000 on coffee.` Check that Ponke records the correct currency and amount. If you changed `DEFAULT_CURRENCY`, use that currency instead.
 4. Send a clear JPEG/PNG receipt. Send it again and cancel the duplicate confirmation.
 5. Send `How much did I spend on food this month?` and `Export my finances.`
-6. Send `Should I spend IDR 1000000 on a laptop?` to try the decision council. This makes nine model calls and may take over a minute at the configured free-tier pace. Use your chosen currency if different.
+6. Send `Should I spend IDR 1000000 on a laptop?` to try the selective council. Fast purchase mode uses two specialists and one synthesis call after routing. Explicit `deep council:` adds a bounded cross-review round and uses more of the free quota.
+7. Send `Finish internship report by Friday`, then `/tasks` and `Mark internship report done`.
+8. Upload a small CSV statement with `date,description,debit,credit,currency` columns, inspect the preview, then confirm. Check that sending the same file again is rejected as already imported.
+9. Send `What is BTC's price?` and check the source, currency, as-of date and freshness label. Public Binance Spot quotes use USDT pairs. Send `Analyze BBCA.JK`; missing fundamentals must be reported as missing, never invented.
+
+## Optional V2 data sources and Sheets
+
+The basic bot works without these extra credentials. For richer market data, create free-tier keys from [CoinGecko Demo](https://support.coingecko.com/hc/en-us/articles/21880397454233-User-Guide-How-to-sign-up-for-CoinGecko-Demo-API-and-generate-an-API-key), [Alpha Vantage](https://www.alphavantage.co/support/#api-key), and [FRED](https://fred.stlouisfed.org/docs/api/api_key.html). Put them in `.env` as `COINGECKO_DEMO_API_KEY`, `ALPHA_VANTAGE_API_KEY`, and `FRED_API_KEY`. Without keys, supported crypto uses public Binance USDT market data and FX uses Frankfurter daily reference rates. Existing user-maintained manual prices remain usable when a feed fails.
+
+For a live spreadsheet copy, create a blank Google Sheet and copy the ID between `/d/` and `/edit` in its URL. In Google Cloud, enable Google Sheets API and add the Sheets OAuth scope alongside Calendar. Set `GOOGLE_SHEETS_ENABLED=true` and `GOOGLE_FINANCE_SHEET_ID=<id>` in `.env`, restart Ponke, and send `/connect_calendar` again to grant the extra scope. Ponke creates the six finance tabs on the first sync. PostgreSQL remains the source of truth; if Google is unavailable, writes still succeed and the outbox retries later. Old rows are not automatically backfilled.
+
+Personality defaults are optional: `PONKE_DEFAULT_LANGUAGE=en`, `PONKE_PERSONALITY_ENABLED=true`, `PONKE_SARCASM_LEVEL=low`, `PONKE_DEFAULT_VERBOSITY=concise`, `PONKE_FINANCE_VERBOSITY=medium`, and `PONKE_HEALTH_SARCASM=false`. You can say “Be shorter” or “Reply in Indonesian” in the bot to save a per-user communication preference.
 
 For problems, run `docker compose logs --tail 100 app` (or `sudo docker compose logs --tail 100 app` on Linux). Common causes are an incorrect Telegram ID, invalid Gemini key, unavailable model, exhausted free-tier quota, missing Google test user, or a Google redirect URI mismatch. If the bot does not respond, check `docker compose ps` and the readiness URL first.
 

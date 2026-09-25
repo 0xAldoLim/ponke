@@ -26,6 +26,19 @@ class Settings(BaseSettings):
     google_client_secret: SecretStr = SecretStr("")
     google_redirect_uri: str = "http://localhost:8000/oauth/google/callback"
     google_calendar_id: str = "primary"
+    google_sheets_enabled: bool = False
+    google_finance_sheet_id: str = ""
+    coingecko_demo_api_key: SecretStr = SecretStr("")
+    alpha_vantage_api_key: SecretStr = SecretStr("")
+    fred_api_key: SecretStr = SecretStr("")
+    market_timeout_seconds: int = 8
+    ponke_default_language: Literal["en", "id"] = "en"
+    user_language: Literal["en", "id"] | None = None
+    ponke_personality_enabled: bool = True
+    ponke_sarcasm_level: Literal["off", "low", "medium"] = "low"
+    ponke_default_verbosity: Literal["concise", "medium", "detailed"] = "concise"
+    ponke_finance_verbosity: Literal["concise", "medium", "detailed"] = "medium"
+    ponke_health_sarcasm: bool = False
     user_timezone: str = "Asia/Jakarta"
     default_currency: str = "IDR"
     daily_briefing_enabled: bool = True
@@ -51,6 +64,11 @@ class Settings(BaseSettings):
     def blank_cost(cls, value):
         return None if value == "" else value
 
+    @field_validator("user_language", mode="before")
+    @classmethod
+    def blank_language(cls, value):
+        return None if value == "" else value
+
     @field_validator("user_timezone")
     @classmethod
     def valid_timezone(cls, value):
@@ -71,6 +89,7 @@ class Settings(BaseSettings):
             self.requests_per_minute < 1
             or not 1 <= self.gemini_requests_per_minute <= 60
             or not 1 <= self.max_upload_bytes <= 20_000_000
+            or not 1 <= self.market_timeout_seconds <= 30
         ):
             raise ValueError("Invalid rate or upload limit")
         return self

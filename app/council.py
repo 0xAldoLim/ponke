@@ -7,11 +7,11 @@ from sqlalchemy import select
 
 from app.database import AgentOpinion, Decision, DecisionOutcome
 from app.schemas import DecisionSynthesis, SpecialistView
-from app.validation import Clarification
+from app.validation import Clarification, money
 
 log = structlog.get_logger()
 ROLES = {
-    "macro": "Macro Opportunity: seek asymmetric upside, liquidity, rates, USD, BTC cycles, Indonesian and global macro, capital rotation. Distinguish supplied evidence from speculation; no current market feed is connected.",
+    "macro": "Macro Opportunity: seek asymmetric upside, liquidity, rates, USD, BTC cycles, Indonesian and global macro, capital rotation. Distinguish supplied timestamped market evidence from speculation; feeds may be stale or unavailable.",
     "risk": "Risk & Portfolio: challenge assumptions, diversification, debt cycles, concentration, drawdowns, correlations, scenario probabilities and tail risk. What if the primary assumption is wrong?",
     "lifestyle": "Lifestyle Utility: weigh value per use, actual usefulness, happiness, impulse spending, lifestyle inflation, urgency and opportunity cost. Discretionary spending can be worthwhile.",
     "health": "Health Reality: evaluate sleep, exercise, recovery, supplements, physical risk and wellbeing. Be conservative on medical topics and recommend qualified care where relevant. Never diagnose.",
@@ -49,12 +49,30 @@ def relevant_roles(decision_type, question):
     return ROLE_SETS["other"]
 
 
+def deep_roles(decision_type, question):
+    roles = list(relevant_roles(decision_type, question))
+    topic = question.casefold()
+    for role, pattern in (
+        ("macro", r"\b(?:economy|market|investment|stock|crypto|interest rate)\b"),
+        ("risk", r"\b(?:risk|debt|portfolio|afford|investment|buy)\b"),
+        ("lifestyle", r"\b(?:lifestyle|career|car|house|purchase|family)\b"),
+        ("health", r"\b(?:health|medical|sleep|fitness|injury)\b"),
+    ):
+        if role not in roles and re.search(pattern, topic):
+            roles.append(role)
+    return tuple(roles[:4])
+
+
 class Council:
     def __init__(self, model):
         self.model = model
 
-    async def run(self, question, context, decision_type=None):
-        roles = relevant_roles(decision_type, question)
+    async def run(self, question, context, decision_type=None, depth="fast"):
+        roles = (
+            deep_roles(decision_type, question)
+            if depth == "deep"
+            else relevant_roles(decision_type, question)
+        )
 
         if len(roles) == 1:
             role = roles[0]
@@ -64,6 +82,8 @@ class Council:
                 "Act only as this functional specialist: "
                 + ROLES[role]
                 + " Give a careful, concise decision from the supplied evidence. "
+                + context.get("voice_instruction", "")
+                + " "
                 "Do not imply other specialists were consulted. Do not output numerical scores in prose. "
                 "Write recommended_action as Ponke speaking directly to the user in one or two short "
                 "natural sentences. Set common_ground empty. "
@@ -89,10 +109,35 @@ class Council:
 
         first_values = await asyncio.gather(*(specialist(role) for role in roles))
         first = {role: opinion.model_dump() for role, opinion in zip(roles, first_values, strict=True)}
+        second = {}
+        if depth == "deep" and len(roles) > 1:
+
+            async def cross_review(role):
+                log.info("agent_invoked", agent=role, round=2)
+                others = {name: view for name, view in first.items() if name != role}
+                return await self.model.structured(
+                    SpecialistView,
+                    "Cross-review the other relevant arguments once. Revise your position only when evidence warrants it. Summarize the strongest unresolved point; no scores or theatrical debate. "
+                    + ROLES[role],
+                    {
+                        "question": question,
+                        "context": context,
+                        "own_argument": first[role],
+                        "other_arguments": others,
+                    },
+                )
+
+            second_values = await asyncio.gather(*(cross_review(role) for role in roles))
+            second = {
+                role: SpecialistView.model_validate(value.model_dump()).model_dump()
+                for role, value in zip(roles, second_values, strict=True)
+            }
         log.info("agent_invoked", agent="chief_analyst")
         verdict = await self.model.structured(
             DecisionSynthesis,
             "Act as Chief Analyst. Synthesize only the selected specialists' arguments. "
+            + context.get("voice_instruction", "")
+            + " "
             "Compare evidence, assumptions and practical consequences. "
             "Write as Ponke speaking directly to the user in plain, concise language. "
             "Keep the total reply under about 75 words. Answer the question first in recommended_action. "
@@ -115,10 +160,14 @@ class Council:
             "Unknown liquidity or debt must prevent a personalized affordability claim. "
             "Do not claim to know current market prices or conditions without supplied evidence. "
             "Use NEED INFORMATION when critical evidence is missing.",
-            {"question": question, "context": context, "arguments": list(first.values())},
+            {
+                "question": question,
+                "context": context,
+                "arguments": list(second.values()) if second else list(first.values()),
+            },
         )
         verdict = DecisionSynthesis.model_validate(verdict.model_dump())
-        return verdict, first, {}
+        return verdict, first, second
 
     async def persist(self, db, user_id, question, context, result):
         verdict, first, second = result
@@ -204,13 +253,25 @@ async def record_outcome(db, user_id, e):
     )
     if not decision or not e.description:
         raise Clarification("Please identify the decision and describe what happened.")
+    result = None
+    if e.result_amount:
+        if not e.currency:
+            raise Clarification("Include the currency for a measurable financial outcome.")
+        negative = e.result_amount.strip().startswith("-")
+        result = money(e.result_amount.strip().lstrip("-"), e.currency)
+        if negative:
+            result = -result
     db.add(
         DecisionOutcome(
             user_id=user_id,
             decision_id=decision.id,
             outcome_description=e.description,
+            user_action=e.actual_action[:250] if e.actual_action else None,
+            measurable_result=result,
+            result_currency=e.currency.upper() if result is not None else None,
             user_satisfaction=e.satisfaction,
         )
     )
     decision.status = "reviewed"
+    decision.follow_up_date = None
     return "Recorded the outcome. Council calibration remains informational until enough outcomes exist."

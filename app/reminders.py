@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from app.database import Activity, Delivery, Reminder, utcnow
+from app.database import Activity, Decision, Delivery, Reminder, utcnow
 from app.validation import Clarification, aware, parse_datetime, recurrence_next
 
 
@@ -119,6 +119,33 @@ class SchedulerWorker:
                     reminder.due_at = following
                 else:
                     reminder.status = "awaiting_completion"
+            decisions = (
+                await db.scalars(
+                    select(Decision)
+                    .where(
+                        Decision.follow_up_date <= now,
+                        Decision.follow_up_date.is_not(None),
+                        Decision.user_id.in_(self.settings.allowed_ids),
+                    )
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+            for decision in decisions:
+                key = f"decision-follow-up:{decision.id}"
+                exists = await db.scalar(
+                    select(Delivery.id).where(
+                        Delivery.user_id == decision.user_id, Delivery.delivery_key == key
+                    )
+                )
+                if not exists:
+                    db.add(
+                        Delivery(
+                            user_id=decision.user_id,
+                            delivery_key=key,
+                            text=f"How did this decision turn out? {decision.user_question[:180]}\nDecision ID: {decision.id}",
+                        )
+                    )
+                decision.follow_up_date = None
         if self.settings.daily_briefing_enabled:
             local = now.astimezone(ZoneInfo(self.settings.user_timezone))
             if local.strftime("%H:%M") >= self.settings.daily_briefing_time:

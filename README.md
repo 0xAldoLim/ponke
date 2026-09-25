@@ -1,6 +1,6 @@
 # Ponke
 
-A private Telegram chief of staff for reminders, Google Calendar, personal finance, receipts and considered decisions. Python 3.12, FastAPI, PostgreSQL, SQLAlchemy 2 and a configurable Gemini or OpenAI model, packaged as one service. Gemini 3.5 Flash-Lite is the default and has a free API tier.
+A private Telegram assistant for reminders, tasks, Google Calendar, personal finance, statement imports and considered decisions. Python 3.12, FastAPI, PostgreSQL, SQLAlchemy 2 and configurable Gemini or OpenAI, packaged as one service. Gemini 3.5 Flash-Lite is the default and has a free API tier.
 
 **Start here:** create your credentials, follow the setup below, then run the acceptance checklist. No credentials are bundled, and live Telegram/Google/Gemini behavior requires your own authorization. The automated tests use controlled API responses rather than claiming that a mock proves live model accuracy.
 
@@ -27,6 +27,12 @@ For a beginner-friendly setup checklist, including a low-cost VPS path without a
 - “What did the council previously say about my PC?” / “details”
 - “Record the outcome for decision [ID]: I waited and saved money; satisfaction 80.”
 - “Give me my morning briefing.”
+- “Finish internship report by Friday.” / “Mark internship report done.” / “What tasks are overdue?”
+- “Create a project called Ponke V2.” / “What projects do I have?”
+- Send a CSV, XLSX or text-extractable PDF bank statement to preview its rows, then confirm ready rows.
+- “What is BTC's price?” / “Analyze BBCA.JK.” / “Should I add Rp5m to BTC?”
+- “Deep council: should I buy a Rp500m car?” / “How have my decisions worked out?”
+- `/data` shows where records and market values come from; `/calibration` summarizes sufficiently sampled outcomes.
 
 Ordinary small expense logs and clear reminders run immediately. Large financial entries, account/portfolio changes, calendar edits/deletions, and duplicate overrides are reviewed through expiring, user-bound confirmation buttons. Ambiguous inputs ask for clarification. Explicit deletion of all transactions requires confirmation of the exact reviewed count and preserves subsequently added entries.
 
@@ -73,11 +79,23 @@ PostgreSQL data lives in Docker's named `ponke_pgdata` volume. Normal shutdown, 
 3. Open your new bot and send `/id` to get your numeric Telegram user ID. This command works in a private chat even before your ID is allowed, and reveals only your own ID. To add someone else, ask them to send `/id` to the bot and give you the number.
 4. Alternatively, before Ponke starts, run `.\.venv\Scripts\python scripts/telegram_user_id.py`. It calls Telegram using the token from `.env` and prints numeric IDs and usernames, not message contents.
 5. Put your numeric ID in `ALLOWED_TELEGRAM_USER_IDS`. Multiple approved IDs are comma-separated. Each gets separate database records and OAuth tokens; timezone, briefing configuration, calendar ID and model quota are deployment-wide. Only add people you trust with access to the bot's shared API quota. After editing the allowlist, run `docker compose up -d --force-recreate app` to load it.
-6. Start Ponke and send `/start`. Only allowlisted users in private one-to-one chats can use assistant actions. `/id` is the sole exception for finding one's own ID; group chats and edited messages do not trigger actions.
+6. Start Ponke and send `/start`. People outside the allowlist receive their own ID and access instructions; `/id` also works before approval. Only allowlisted users in private one-to-one chats can use assistant actions. In groups, Ponke directs `/start` and `/id` senders to a private chat without posting their ID; other group messages and edited messages do not trigger actions.
 
 If the ID helper finds no updates, use `/id` in a private bot chat instead. [Telegram's official bot tutorial](https://core.telegram.org/bots/tutorial) explains BotFather and tokens.
 
-Optional shortcuts: `/connect_calendar`, `/export_finance`, `/briefing`, `/reminders`. Normal use is natural language.
+Optional shortcuts: `/connect_calendar`, `/export_finance`, `/briefing`, `/reminders`, `/tasks`, `/projects`, `/data`, `/calibration`. Normal use is natural language.
+
+## V2 market data and research
+
+Ponke has swappable market providers with a PostgreSQL TTL cache. Public [Binance Spot market data](https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md) supplies no-key BTC/ETH and other supported USDT pair quotes. Set `COINGECKO_DEMO_API_KEY` to use [CoinGecko Demo](https://support.coingecko.com/hc/en-us/articles/21880397454233-User-Guide-How-to-sign-up-for-CoinGecko-Demo-API-and-generate-an-API-key) for USD crypto prices, market cap and volume. Set `ALPHA_VANTAGE_API_KEY` for [equity quotes, compact daily history and available fundamentals](https://www.alphavantage.co/documentation/); `.JK` symbols are sent to the provider as entered, and unsupported tickers remain unavailable. [Frankfurter](https://frankfurter.dev/) supplies no-key daily reference FX rates. Set `FRED_API_KEY` for [US macro observations](https://fred.stlouisfed.org/docs/api/fred/series_observations.html). These are optional free or free-tier services with their own quotas and coverage.
+
+Every quote names its source, observation date and LIVE/CACHED/MANUAL freshness. If a feed fails, Ponke uses an existing cached value with a stale warning, then a user-entered manual price when available. It never silently converts currencies. Research keeps absent financial metrics as missing, computes supported growth and valuation fields in Python, and considers recorded holdings and cash. A purchase scenario is hypothetical and **no trade is placed**. A USDT pair is not labeled as USD. A free feed does not imply complete historical fundamentals or Indonesian macro coverage.
+
+## Statement imports and Sheets
+
+Send a CSV, XLSX or text-extractable PDF privately. Generic headers such as `date`, `description`, `debit`, `credit`, `amount`, `currency` (including common Indonesian variants) are recognized. Rows with an unsigned amount and no debit/credit column remain **review-only** because direction is ambiguous. Ponke previews row counts and likely duplicates before showing Confirm/Cancel. Confirmation imports only ready rows, with idempotent source IDs and another duplicate check. Add an existing account name as the caption if you want rows linked to it; otherwise they are unlinked. PDF extraction is conservative; image-only or non-tabular PDFs need a CSV/XLSX export instead. Original statement bytes are not stored, but parsed preview rows remain in PostgreSQL until cleaned up.
+
+Google Sheets is optional and never replaces PostgreSQL. Create a spreadsheet, enable the [Google Sheets API](https://developers.google.com/workspace/sheets/api/quickstart/python) in the same Google Cloud project, set `GOOGLE_SHEETS_ENABLED=true` and `GOOGLE_FINANCE_SHEET_ID` in `.env`, then send `/connect_calendar` again so OAuth requests the [Sheets scope](https://developers.google.com/workspace/sheets/api/scopes). Ponke creates tabs named Transactions, Accounts, Monthly Summary, Investments, Net Worth and Decision History and updates rows by stable ID. It uses a durable outbox with retries; a Sheets outage never rolls back a finance entry. Existing rows made before enabling Sheets are not backfilled automatically. The chosen spreadsheet is shared by any allowed user who grants access, with user-prefixed row IDs; use separate deployments/spreadsheets for strict external sharing boundaries.
 
 ## Gemini free-tier setup
 
@@ -161,6 +179,24 @@ For the same service suite against PostgreSQL, use a **disposable database whose
 
 After you supply credentials, run these live checks with small test entries:
 
+The V2 acceptance prompts are:
+
+| Case | Send | Check |
+| --- | --- | --- |
+| A | `Spent 48k on coffee using BCA.` | Correct deterministic IDR transaction. |
+| B | `Finish internship report by Friday.` | Creates a Task, not a Reminder. |
+| C | `What's important today?` | Briefing includes today's calendar and ranked tasks. |
+| D | Upload a small CSV bank statement. | Preview shows ready, duplicate and review counts. |
+| E | Confirm the statement preview. | Only ready nonduplicates are committed. |
+| F | `Analyze BTC.` | Source, currency, as-of timestamp and missing fields are explicit. |
+| G | `Should I add Rp5m to BTC?` | Recorded portfolio/cash and Macro + Risk inform a hypothetical scenario; no trade. |
+| H | `Deep council: should I buy a Rp500m car?` | Explicit second round only; response remains concise. |
+| I | `Analyze BBCA.JK.` | Available quote/fundamentals/valuation, with unknowns stated. |
+| J | `How have my decisions worked out?` | Recorded outcomes; calibration says when sample is below 20. |
+| K | Log an expense during a Sheets outage. | PostgreSQL write succeeds and outbox retries. |
+
+The original MVP checks remain useful:
+
 | Test | Send in Telegram | Verify |
 |---|---|---|
 | A | Remind me in 2 minutes to water the plants. | Saved reminder; notification arrives; Done records completion. |
@@ -187,7 +223,7 @@ Telegram private chat → allowlist/rate limit → structured intent → typed s
   └─ bounded conversation context / explicit preferences / analyst / briefings
 ```
 
-Modules are in `app/`; the orchestrator calls explicit validated Python functions, never model-generated SQL or shell. SQLAlchemy scopes reads and writes by the authenticated Telegram ID. The council selects only relevant specialists: health alone for health decisions, macro and risk for investments, lifestyle and risk for purchases and career choices. Two selected specialists receive identical factual context independently, then a final synthesis compares their arguments. Single-domain health decisions use one specialist response. The reply gives the recommendation, shared ground, meaningful disagreement and critical missing evidence in natural prose. New council calls do not request numerical specialist scores or weights. Legacy numeric database columns remain for compatibility and store zero as a sentinel for new decisions; exports leave unscored confidence blank.
+Modules are in `app/`; the orchestrator calls explicit validated Python functions, never model-generated SQL or shell. SQLAlchemy scopes reads and writes by the authenticated Telegram ID. The council selects only relevant specialists: health alone for health decisions, macro and risk for investments, lifestyle and risk for purchases and career choices. Fast mode uses one independent round and a concise synthesis where needed. Explicit deep mode can use up to four relevant specialists, one cross-review round, and a final synthesis. The reply gives the recommendation, shared ground, meaningful disagreement and critical missing evidence in natural prose. New council calls do not request numerical specialist scores or weights. Legacy numeric database columns remain for compatibility and store zero as a sentinel for new decisions; exports leave unscored confidence blank.
 
 Financial amounts use `Decimal` and database `NUMERIC`. Totals, category spending, cash flow, savings rate, recorded-month averages, repeated-charge candidates, holding values, allocation and reported net worth are computed in code. FX is not inferred. Bank/cash/e-wallet balances are user-reconciled snapshots; expense logging does not silently rewrite a snapshot with unknown coverage. Investment-account balance snapshots are excluded from cash totals to avoid double-counting holdings. Reported net worth subtracts recorded liability-account balances; incomplete coverage is always explicit.
 
@@ -195,11 +231,11 @@ Receipt files are validated, decoded/re-encoded without metadata and sent to the
 
 Conversation retrieval is at most eight entries from seven days. Older entries are pruned when that user next talks to Ponke. Structured preferences, transactions and decisions remain until deliberately managed. Relevant aggregates are retrieved for analysis; the whole database is never sent to the model. Plain Telegram responses avoid Markdown injection; spreadsheet exports escape formula-looking text.
 
-Ponke's Telegram voice is warm, direct and concise, and follows the user's language and level of formality. Fixed status messages are softened only when delivered; saved replies, facts, identifiers, dates and amounts retain their meaning. Longer requests show typing progress and one brief status message so the user knows Ponke is still working. The response style instruction applies only to final, user-facing model answers, not intent routing or specialist deliberation.
+Ponke's Telegram voice is direct and concise, with mild dry humor only when appropriate. It challenges weak assumptions without a canned template. English is the default even for Indonesian finance topics; an explicit Indonesian request or a fully Indonesian message can change the reply language. Stable corrections such as “Be shorter” are saved per user. Personality applies to user-facing model answers, not calculations, records or exports. Fixed tool confirmations stay brief and preserve their values. Longer requests show typing progress and one status message.
 
 Reminders use one row plus RFC5545 daily/weekly/monthly/yearly recurrence. The scheduler produces at most one overdue occurrence per reminder after downtime and advances from the original recurrence, preserving local wall-clock time. Outbox entries persist through restart and retry delivery with backoff. Telegram has no client idempotency key: a crash after Telegram accepted a message but before the database marked it sent can produce a duplicate notification. This is **at-least-once**, not exactly-once delivery.
 
-Daily briefings run once per local date after `DAILY_BRIEFING_TIME`; a restart later that day catches up once. Set `DAILY_BRIEFING_ENABLED=false` to disable. `DAILY_BRIEFING_SECTIONS` accepts `today,reminders,finance,notable,priorities`. Missing calendar data degrades to a clear unavailable message. Insights distinguish recorded FACT from POSSIBLE PATTERN and avoid psychological claims.
+Daily briefings run once per local date after `DAILY_BRIEFING_TIME`; a restart later that day catches up once. Set `DAILY_BRIEFING_ENABLED=false` to disable. `DAILY_BRIEFING_SECTIONS` accepts `today,reminders,tasks,finance,notable,priorities`. Missing calendar data degrades to a clear unavailable message. Task priorities use explicit priority, deadline, overdue status and estimated effort. Insights distinguish recorded FACT from POSSIBLE PATTERN and avoid psychological claims. Decision follow-ups use the durable Telegram delivery queue.
 
 ## Deployment: one small Linux VPS
 
@@ -251,9 +287,9 @@ A database dump without the encryption key cannot recover Google tokens; reconne
 ## Limitations and next steps
 
 - Live model interpretation, Telegram delivery and Google authorization need your credentials and live acceptance checks. No real financial records are seeded.
-- Manual market-price snapshots only; historical price retrieval is empty by design. No live financial news, medical evidence search, brokerage execution, banking sync or FX conversion. Time-sensitive evidence is identified as missing.
+- Optional market providers supply quotes and limited daily history; free-tier coverage, historical financial statements and some Indonesian macro data remain incomplete. No live news, medical evidence search, brokerage execution, banking sync or automatic FX conversion. Time-sensitive evidence is identified as missing.
 - Reported net worth depends on your recorded assets, liability snapshots and prices. Unknown balances are never fabricated; stale snapshots are flagged.
-- No calendar recurrence creation/editing, recurring exception editor, arbitrary document/PDF extraction, voice, arbitrary administrative operations, or web dashboard. These are outside this MVP's implemented interface.
+- No calendar recurrence creation/editing, recurring exception editor, OCR for scanned statements, voice, arbitrary administrative operations, or web dashboard. These are outside this MVP's implemented interface.
 - Account/portfolio edits require confirmation; balances do not automatically reconcile with backdated transactions. Quantity precision is ten decimals; monetary precision is four decimals.
 - Receipt duplicate matching is heuristic. Separate purchases can match; a confirmed override is available. Poor receipts need explicit correction.
 - A crash mid-request may leave an inbound request marked processing or an action outcome uncertain. Ponke avoids blind replay; inspect records before a new request. Durable conversational response delivery and automated recovery are recommended next.

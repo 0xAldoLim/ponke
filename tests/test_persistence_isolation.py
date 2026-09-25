@@ -102,5 +102,27 @@ async def test_id_command_reveals_only_private_senders_own_id(env):
     )
     update.effective_chat = SimpleNamespace(id=-789, type="group")
     await gateway.id_command(update, None)
-    response.assert_awaited_once()
+    response.assert_awaited_with("Message me privately and send /id to see your Telegram ID.")
+    assert response.await_count == 2
+    assert not model.calls
+
+
+async def test_unapproved_friend_gets_onboarding_without_workspace_access(env):
+    settings, _, model, _, service = env
+    gateway = Gateway(settings, service)
+    response = AsyncMock()
+    message = SimpleNamespace(reply_text=response)
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=789),
+        effective_chat=SimpleNamespace(id=789, type="private"),
+        effective_message=message,
+        message=message,
+    )
+    await gateway.start_command(update, None)
+    response.assert_awaited_with(
+        "Hi, I'm Ponke. Your Telegram ID is 789. Send it to the bot owner "
+        "to request access. Once they add you, send /start again."
+    )
+    await gateway.message(update, None)
+    assert "Send /id here" in response.await_args.args[0]
     assert not model.calls

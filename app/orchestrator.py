@@ -5,9 +5,22 @@ from zoneinfo import ZoneInfo
 import structlog
 from sqlalchemy import select
 
-from app.analyst import daily_briefing, personal_analysis
+from app.analyst import calibration_report, daily_briefing, personal_analysis
 from app.council import Council, history, record_outcome, render_verdict
-from app.database import Activity, Inbound, PendingAction, Receipt, Reminder, Transaction, utcnow
+from app.database import (
+    Account,
+    Activity,
+    Asset,
+    Decision,
+    Holding,
+    Inbound,
+    MarketCache,
+    PendingAction,
+    Receipt,
+    Reminder,
+    Transaction,
+    utcnow,
+)
 from app.exports import export_finance
 from app.finance import (
     account_snapshot,
@@ -18,13 +31,18 @@ from app.finance import (
     seed_categories,
     summary,
 )
+from app.investment import research
+from app.market import MarketService, render_market
 from app.memory import conversation_context, remember_conversation, retrieve, set_memory
 from app.portfolio import update_portfolio
 from app.receipts import duplicate_receipt, extract_receipt
 from app.reminders import change_reminder, create_reminder
 from app.schemas import Answer, Entities, IntentResult, ReceiptData
+from app.sheets import enqueue_derived, enqueue_sync
+from app.statements import commit_statement, preview_statement
+from app.tasks import project_action, task_action
 from app.validation import Clarification, aware, cash, money, parse_datetime
-from app.voice import ANSWER_VOICE
+from app.voice import localize_fixed_reply, message_language, preference_correction, voice_instruction
 
 log = structlog.get_logger()
 
@@ -54,6 +72,18 @@ If awaiting_receipt is present and the user explicitly supplies the missing amou
 with that pending target_id and corrections in entities. Never apply a correction to an unrelated message.
 For ambiguity return clarify plus a short specific question; confidence below 0.8 must not cause writes.
 For general questions do not invent current facts or user information.
+"What's important today?" and similar combined daily priorities use daily_briefing, not task.query.
+Tasks and reminders are distinct: task.create/query/update/complete for to-dos; project.create/query for projects.
+Use market.quote for explicit live price/rate questions, market.macro for economic observations,
+investment.research for asset fundamentals/valuation research. A recommendation still uses
+decision.request or finance.investment_analysis. Put the ticker in symbol and asset_type.
+Use analysis_depth=deep ONLY if explicitly asked for a deep/full council; otherwise fast.
+Use data.sources for /data or a question about data provenance; council.calibration for past
+decision calibration. decision.follow_up sets follow_up_date for an existing decision.
+decision.outcome records a specific existing decision, what the user actually did in actual_action,
+the described result, optional satisfaction, and signed result_amount with explicit currency.
+Use memory.set for explicit stable communication preferences. Never route investment discussion
+to portfolio.trade unless the user reports a completed trade.
 """
 
 
@@ -70,11 +100,12 @@ class Orchestrator:
     def __init__(self, sessions, settings, model, calendar):
         self.sessions, self.settings, self.model, self.calendar = sessions, settings, model, calendar
         self.council = Council(model)
+        self.market = MarketService(settings)
 
     async def briefing(self, user_id):
         return await daily_briefing(self.sessions, self.calendar, user_id, self.settings)
 
-    async def handle(self, user_id, source, text, image=None, file_id=None):
+    async def handle(self, user_id, source, text, image=None, file_id=None, document=None, filename=None):
         if user_id not in self.settings.allowed_ids:
             raise PermissionError("Unauthorized")
         if len(text) > 6000:
@@ -91,17 +122,46 @@ class Orchestrator:
             db.add(Inbound(user_id=user_id, message_key=source))
             await seed_categories(db, user_id)
         try:
-            if image is not None:
+            if document is not None:
+                async with self.sessions.begin() as db:
+                    import_id, preview = await preview_statement(
+                        db, user_id, filename or "statement.csv", document, text.strip() or None
+                    )
+                reply = await self.pending(user_id, {"kind": "statement", "import_id": import_id}, preview)
+            elif image is not None:
                 reply = await self.process_receipt(user_id, source, text, image, file_id)
             else:
-                intent = await self.route(user_id, text)
-                log.info("intent_selected", intent=intent.intent, confidence=intent.confidence)
-                if intent.confidence < 0.8 or intent.intent == "clarify":
+                corrections = preference_correction(text)
+                if corrections:
+                    async with self.sessions.begin() as db:
+                        for key, value in corrections.items():
+                            await set_memory(db, user_id, "preference." + key, value)
                     reply = Reply(
-                        intent.clarification or "Please clarify the date, amount, or item you mean."
+                        "Baik, saya akan memakai gaya itu mulai sekarang."
+                        if corrections.get("language") == "id"
+                        else "Got it. I'll use that style from now on."
                     )
                 else:
-                    reply = await self.execute(user_id, source, text, intent)
+                    intent = await self.route(user_id, text)
+                    log.info("intent_selected", intent=intent.intent, confidence=intent.confidence)
+                    if intent.confidence < 0.8 or intent.intent == "clarify":
+                        reply = Reply(
+                            intent.clarification or "Please clarify the date, amount, or item you mean."
+                        )
+                    else:
+                        reply = await self.execute(user_id, source, text, intent)
+                async with self.sessions() as db:
+                    prefs = await retrieve(db, user_id, "preference.")
+                reply.text = localize_fixed_reply(
+                    reply.text,
+                    message_language(
+                        text,
+                        prefs.get(
+                            "preference.language",
+                            self.settings.user_language or self.settings.ponke_default_language,
+                        ),
+                    ),
+                )
             async with self.sessions.begin() as db:
                 row = await db.scalar(
                     select(Inbound).where(Inbound.user_id == user_id, Inbound.message_key == source)
@@ -148,6 +208,10 @@ class Orchestrator:
             "/connect_calendar": "calendar.connect",
             "/briefing": "daily_briefing",
             "/reminders": "reminder.query",
+            "/tasks": "task.query",
+            "/projects": "project.query",
+            "/data": "data.sources",
+            "/calibration": "council.calibration",
         }
         if text.strip() in shortcuts:
             return IntentResult(
@@ -178,6 +242,10 @@ class Orchestrator:
         }
         result = await self.model.structured(IntentResult, ROUTER, data, fast=True)
         result = IntentResult.model_validate(result.model_dump())
+        if text.casefold().startswith(
+            ("deep council:", "run the full council", "give me a deep decision analysis")
+        ) and result.intent in {"decision.request", "finance.investment_analysis"}:
+            result.entities.analysis_depth = "deep"
         fast_model = (
             self.settings.gemini_fast_model
             if self.settings.ai_provider == "gemini"
@@ -217,6 +285,10 @@ class Orchestrator:
         try:
             if payload["kind"] == "receipt":
                 reply = await self.save_receipt(user_id, payload, override=True)
+            elif payload["kind"] == "statement":
+                async with self.sessions.begin() as db:
+                    reply = Reply(await commit_statement(db, user_id, payload["import_id"]))
+                    await enqueue_derived(db, user_id)
             else:
                 reply = await self.execute(
                     user_id,
@@ -298,17 +370,83 @@ class Orchestrator:
             return Reply(await self.briefing(user_id))
         if kind == "finance.receipt":
             return await self.correct_receipt(user_id, e)
+        if kind in {"market.quote", "market.macro"}:
+            if not e.symbol:
+                raise Clarification("Which ticker, pair, or macro series?")
+            market_kind = (
+                "macro"
+                if kind == "market.macro"
+                else "fx"
+                if "/" in e.symbol
+                else "crypto"
+                if (
+                    e.asset_type == "crypto"
+                    or e.symbol.upper() in {"BTC", "ETH", "SOL", "BNB", "ADA", "XRP", "DOGE"}
+                )
+                else "equity"
+            )
+            async with self.sessions.begin() as db:
+                value = await self.market.get(db, user_id, market_kind, e.symbol)
+            return Reply(render_market(value))
+        if kind == "investment.research":
+            if not e.symbol:
+                raise Clarification("Which asset should I research?")
+            async with self.sessions.begin() as db:
+                report = await research(
+                    db,
+                    user_id,
+                    self.market,
+                    e.symbol,
+                    e.asset_type or "stock",
+                    money(e.amount, e.currency or self.settings.default_currency) if e.amount else None,
+                    e.currency or self.settings.default_currency if e.amount else None,
+                    include_history=True,
+                )
+                prefs = await retrieve(db, user_id, "preference.")
+                answer = await self.model.structured(
+                    Answer,
+                    "Explain this normalized research concisely. State missing data and provenance. Never invent a metric or calculate a new figure. No trade was placed. "
+                    + voice_instruction(self.settings, prefs, "finance", text),
+                    {"question": text, "research": report.model_dump(mode="json")},
+                )
+            return Reply(answer.text)
         if kind in {"decision.request", "finance.investment_analysis"}:
-            async with self.sessions() as db:
+            async with self.sessions.begin() as db:
                 context = await financial_context(db, user_id, self.settings)
                 context["preferences"] = await retrieve(db, user_id, "preference.")
+                domain = (
+                    "health"
+                    if e.decision_type == "health"
+                    else "finance"
+                    if kind == "finance.investment_analysis" or e.decision_type == "investment"
+                    else "general"
+                )
+                context["voice_instruction"] = voice_instruction(
+                    self.settings, context["preferences"], domain, text
+                )
+                if (kind == "finance.investment_analysis" or e.decision_type == "investment") and e.symbol:
+                    context["investment_research"] = (
+                        await research(
+                            db,
+                            user_id,
+                            self.market,
+                            e.symbol,
+                            e.asset_type or "stock",
+                            money(e.amount, e.currency or self.settings.default_currency)
+                            if e.amount
+                            else None,
+                            e.currency or self.settings.default_currency if e.amount else None,
+                        )
+                    ).model_dump(mode="json")
             result = await self.council.run(
                 text,
                 context,
                 e.decision_type or ("investment" if kind == "finance.investment_analysis" else None),
+                e.analysis_depth or "fast",
             )
             async with self.sessions.begin() as db:
-                await self.council.persist(db, user_id, text, context, result)
+                decision = await self.council.persist(db, user_id, text, context, result)
+                await enqueue_sync(db, user_id, "decision", decision.id)
                 db.add(Activity(user_id=user_id, kind=kind, reference=source))
             return Reply(render_verdict(result[0]))
         async with self.sessions.begin() as db:
@@ -316,6 +454,8 @@ class Orchestrator:
                 transaction = await add_transaction(
                     db, user_id, e, source, text, self.settings, intent.confidence
                 )
+                await enqueue_sync(db, user_id, "transaction", transaction.id)
+                await enqueue_derived(db, user_id)
                 reply = Reply(self.transaction_text(transaction))
             elif kind == "finance.query":
                 lo, hi = month_range(utcnow(), self.settings.user_timezone)
@@ -333,7 +473,9 @@ class Orchestrator:
                     "Never perform new arithmetic or invent balances. Only cite numerical values present in data. "
                     "Unknown balances and incomplete net worth must be acknowledged. Mark inferred patterns POSSIBLE PATTERN. "
                     "If the request is a simple category total, reply with one short sentence. "
-                    + ANSWER_VOICE,
+                    + voice_instruction(
+                        self.settings, await retrieve(db, user_id, "preference."), "finance", text
+                    ),
                     {"question": text, "query_result": result, "financial_context": context},
                     fast=False,
                 )
@@ -354,6 +496,7 @@ class Orchestrator:
                     )
                 ).all()
                 for transaction in rows:
+                    await enqueue_sync(db, user_id, "transaction", transaction.id, "delete")
                     db.add(
                         Activity(
                             user_id=user_id,
@@ -368,6 +511,7 @@ class Orchestrator:
                         )
                     )
                     await db.delete(transaction)
+                await enqueue_derived(db, user_id)
                 reply = Reply(f"Deleted {len(rows)} reviewed transactions; audit records are retained.")
             elif kind == "finance.delete":
                 if not e.target_id:
@@ -391,9 +535,19 @@ class Orchestrator:
                     )
                 )
                 await db.delete(transaction)
+                await enqueue_sync(db, user_id, "transaction", transaction.id, "delete")
+                await enqueue_derived(db, user_id)
                 reply = Reply("Deleted the selected transaction; its audit record is retained.")
             elif kind == "finance.account":
                 reply = Reply(await account_snapshot(db, user_id, e, self.settings))
+                account = await db.scalar(
+                    select(Account).where(
+                        Account.user_id == user_id, Account.name == (e.account or "").strip()
+                    )
+                )
+                if account:
+                    await enqueue_sync(db, user_id, "account", account.id)
+                    await enqueue_derived(db, user_id)
             elif kind == "finance.category":
                 reply = Reply(await correct_category(db, user_id, e))
             elif kind == "finance.budget":
@@ -403,6 +557,21 @@ class Orchestrator:
                 reply = Reply("Monthly budget set to " + cash(amount, currency) + ".")
             elif kind.startswith("portfolio."):
                 reply = Reply(await update_portfolio(db, user_id, kind, e, source))
+                await db.flush()
+                asset = await db.scalar(
+                    select(Asset).where(
+                        Asset.user_id == user_id, Asset.symbol == (e.symbol or "").upper().strip()
+                    )
+                )
+                if asset:
+                    holdings = (
+                        await db.scalars(
+                            select(Holding).where(Holding.user_id == user_id, Holding.asset_id == asset.id)
+                        )
+                    ).all()
+                    for holding in holdings:
+                        await enqueue_sync(db, user_id, "investment", holding.id)
+                    await enqueue_derived(db, user_id)
             elif kind == "reminder.create":
                 reminder = await create_reminder(db, user_id, e, source, self.settings)
                 local = aware(reminder.due_at).astimezone(ZoneInfo(self.settings.user_timezone))
@@ -442,6 +611,44 @@ class Orchestrator:
                 reply = Reply(await history(db, user_id, e.search, kind == "decision.details"))
             elif kind == "decision.outcome":
                 reply = Reply(await record_outcome(db, user_id, e))
+                if e.target_id:
+                    await enqueue_sync(db, user_id, "decision", e.target_id)
+            elif kind == "decision.follow_up":
+                decision = await db.scalar(
+                    select(Decision).where(Decision.user_id == user_id, Decision.id == e.target_id)
+                )
+                if not decision or not e.start:
+                    raise Clarification("Give me a decision ID and a follow-up date.")
+                date = parse_datetime(e.start, self.settings.user_timezone)
+                if date <= utcnow():
+                    raise Clarification("Choose a future follow-up date.")
+                decision.follow_up_date = date
+                reply = Reply(
+                    f"I'll follow up on that decision on {date.astimezone(ZoneInfo(self.settings.user_timezone)):%d %b %Y}."
+                )
+                await enqueue_sync(db, user_id, "decision", decision.id)
+            elif kind == "council.calibration":
+                reply = Reply(await calibration_report(db, user_id))
+            elif kind == "data.sources":
+                recent = (
+                    await db.scalars(select(MarketCache).order_by(MarketCache.fetched_at.desc()).limit(8))
+                ).all()
+                lines = [
+                    "PostgreSQL: your records (USER). Manual holding prices: USER/MANUAL.",
+                    "Feeds: public Binance Spot crypto; Frankfurter daily FX; CoinGecko, Alpha Vantage and FRED when their keys are configured.",
+                ]
+                for item in recent:
+                    lines.append(
+                        f"{item.cache_key}: {item.payload.get('source', item.provider)} (CACHED{' · stale' if aware(item.expires_at) <= utcnow() else ''}); as of {item.payload.get('as_of') or 'unknown'}."
+                    )
+                if not recent:
+                    lines.append("No market values have been cached yet.")
+                lines.append("Google Sheets is a retryable copy when enabled; it is not the source of truth.")
+                reply = Reply("\n".join(lines))
+            elif kind.startswith("task."):
+                reply = Reply(await task_action(db, user_id, kind, e, self.settings))
+            elif kind.startswith("project."):
+                reply = Reply(await project_action(db, user_id, kind, e))
             elif kind == "personal_analysis":
                 reply = Reply(await personal_analysis(db, user_id, self.settings))
             elif kind == "memory.set":
@@ -452,7 +659,9 @@ class Orchestrator:
                     Answer,
                     "Answer concisely. No live browsing is connected: do not assert current prices, news, medical or legal facts. "
                     "For time-sensitive factual requests explain what evidence is needed. Do not claim access to tools or data not supplied. "
-                    + ANSWER_VOICE,
+                    + voice_instruction(
+                        self.settings, await retrieve(db, user_id, "preference."), "general", text
+                    ),
                     {"question": text, "recent_conversation": await conversation_context(db, user_id)},
                     fast=True,
                 )
@@ -686,6 +895,8 @@ class Orchestrator:
             transaction = await add_transaction(
                 db, user_id, e, payload["source"], payload["text"], self.settings, data.confidence, receipt.id
             )
+            await enqueue_sync(db, user_id, "transaction", transaction.id)
+            await enqueue_derived(db, user_id)
             return Reply(self.transaction_text(transaction))
 
     def events_text(self, events):

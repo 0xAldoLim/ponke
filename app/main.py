@@ -12,6 +12,7 @@ from app.llm import create_model
 from app.logging import configure_logging
 from app.orchestrator import Orchestrator
 from app.reminders import SchedulerWorker
+from app.sheets import SheetsWorker
 from app.telegram import Gateway
 from app.validation import Clarification
 
@@ -41,9 +42,11 @@ def create_app(settings=None):
             gateway = Gateway(config, service)
             app.state.calendar = calendar
             worker = SchedulerWorker(sessions, config, gateway, service.briefing)
+            sheets_worker = SheetsWorker(sessions, config, calendar)
             await gateway.start()
             scheduler = AsyncIOScheduler(timezone=config.user_timezone)
             scheduler.add_job(worker.tick, "interval", seconds=15, max_instances=1, coalesce=True)
+            scheduler.add_job(sheets_worker.tick, "interval", seconds=30, max_instances=1, coalesce=True)
             scheduler.start()
             app.state.ready = True
             yield
@@ -55,6 +58,8 @@ def create_app(settings=None):
                 await gateway.stop()
             if calendar:
                 await calendar.close()
+            if "service" in locals():
+                await service.market.close()
             if model:
                 await model.close()
             if engine.dialect.name == "postgresql":

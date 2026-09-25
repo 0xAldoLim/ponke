@@ -58,9 +58,19 @@ class Gateway:
         )
 
     async def start_command(self, update, context):
-        if not self.authorized(update):
+        user, chat, message = update.effective_user, update.effective_chat, update.effective_message
+        if not user or not chat or not message:
             return
-        await update.effective_message.reply_text(
+        if chat.type != "private":
+            await message.reply_text("Message me privately and send /start to get set up.")
+            return
+        if not self.authorized(update):
+            await message.reply_text(
+                f"Hi, I'm Ponke. Your Telegram ID is {user.id}. Send it to the bot owner "
+                "to request access. Once they add you, send /start again."
+            )
+            return
+        await message.reply_text(
             "Hey, I'm Ponke. Tell me what you're trying to get done and I'll help you work through it. "
             "I can keep track of expenses, set reminders, check your calendar, read receipts, "
             "and help think through decisions.\n\n"
@@ -70,15 +80,25 @@ class Gateway:
         )
 
     async def id_command(self, update, context):
-        user, chat = update.effective_user, update.effective_chat
-        if not user or not chat or chat.type != "private" or chat.id != user.id:
+        user, chat, message = update.effective_user, update.effective_chat, update.effective_message
+        if not user or not chat or not message:
             return
-        await update.effective_message.reply_text(
+        if chat.type != "private":
+            await message.reply_text("Message me privately and send /id to see your Telegram ID.")
+            return
+        await message.reply_text(
             f"Your Telegram user ID is {user.id}. The bot owner can add this ID to the allowlist."
         )
 
     async def message(self, update, context):
-        if not self.authorized(update) or not update.message:
+        if not update.message or not update.effective_user or not update.effective_chat:
+            return
+        if not self.authorized(update):
+            if update.effective_chat.type == "private" and self.limiter.allow(update.effective_user.id):
+                await update.message.reply_text(
+                    "I can't use your personal workspace yet. Send /id here and share the number "
+                    "with the bot owner to request access."
+                )
             return
         user_id = update.effective_user.id
         if not self.limiter.allow(user_id):
@@ -91,29 +111,56 @@ class Gateway:
             try:
                 message = update.message
                 text = message.text or message.caption or ""
-                image, unique_id = None, None
+                image, document, filename, unique_id = None, None, None, None
                 attachment = message.photo[-1] if message.photo else message.document
                 if attachment:
-                    if message.document and message.document.mime_type not in {"image/jpeg", "image/png"}:
-                        raise Clarification(
-                            "Please send a JPEG or PNG receipt. PDF and other document types are not supported yet."
-                        )
+                    statement_types = {
+                        "text/csv",
+                        "text/plain",
+                        "application/vnd.ms-excel",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        "application/pdf",
+                        "application/octet-stream",
+                    }
+                    is_statement = bool(
+                        message.document
+                        and message.document.file_name
+                        and message.document.file_name.lower().endswith((".csv", ".xlsx", ".pdf"))
+                    )
+                    if (
+                        message.document
+                        and not is_statement
+                        and message.document.mime_type not in {"image/jpeg", "image/png"}
+                    ):
+                        raise Clarification("Send a JPEG/PNG receipt or a CSV/XLSX/PDF bank statement.")
+                    if is_statement and message.document.mime_type not in statement_types:
+                        raise Clarification("The file type doesn't match a supported statement.")
                     if attachment.file_size is None or attachment.file_size > self.settings.max_upload_bytes:
                         raise Clarification(
                             "This image is too large or its size is unknown. Please send a smaller receipt image."
                         )
                     file = await attachment.get_file()
                     # Telegram Bot API metadata is the only download source; never accept a user URL.
-                    image = bytes(await file.download_as_bytearray())
-                    if len(image) > self.settings.max_upload_bytes:
-                        raise Clarification("This image is too large. Please send a smaller one.")
+                    content = bytes(await file.download_as_bytearray())
+                    if len(content) > self.settings.max_upload_bytes:
+                        raise Clarification("This file is too large. Please send a smaller one.")
+                    if is_statement:
+                        document, filename = content, message.document.file_name
+                    else:
+                        image = content
                     unique_id = attachment.file_unique_id
                 elif not text:
                     raise Clarification("Please send text or a receipt image.")
                 progress = asyncio.create_task(self.show_progress(user_id))
                 try:
                     reply = await self.orchestrator.handle(
-                        user_id, f"{message.chat_id}:{message.message_id}", text, image, unique_id
+                        user_id,
+                        f"{message.chat_id}:{message.message_id}",
+                        text,
+                        image,
+                        unique_id,
+                        document,
+                        filename,
                     )
                 finally:
                     progress.cancel()

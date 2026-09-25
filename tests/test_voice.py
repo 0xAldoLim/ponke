@@ -13,7 +13,7 @@ from app.voice import ANSWER_VOICE, present_reply
 def test_fixed_reply_voice_preserves_action_details():
     original = "Logged Rp48,000\nCoffee\nFood & Drinks\nBCA\nID: tx-123"
     shown = present_reply(original)
-    assert shown.startswith("Got it — logged ")
+    assert shown.startswith("Logged ")
     assert shown.endswith("Rp48,000\nCoffee\nFood & Drinks\nBCA\nID: tx-123")
     assert present_reply("Confirm receipt: Cafe, 2026-09-24, Rp48,000?").endswith(
         "Cafe, 2026-09-24, Rp48,000?"
@@ -82,7 +82,7 @@ async def test_gateway_changes_only_delivered_text(env):
     original = "Reminder saved: water the plants\nThu, 24 Sep 2026 at 20:00 MYT"
     await gateway.send(123, original, reminder_id="abc123")
     sent = bot.send_message.call_args
-    assert sent.args[1] == "Got it — I'll remind you: water the plants\nThu, 24 Sep 2026 at 20:00 MYT"
+    assert sent.args[1] == "I'll remind you: water the plants\nThu, 24 Sep 2026 at 20:00 MYT"
     assert sent.kwargs["reply_markup"] is not None
     assert original.startswith("Reminder saved:")
 

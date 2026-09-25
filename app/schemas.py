@@ -37,6 +37,18 @@ Intent = Literal[
     "personal_analysis",
     "daily_briefing",
     "memory.set",
+    "task.create",
+    "task.query",
+    "task.update",
+    "task.complete",
+    "project.create",
+    "project.query",
+    "market.quote",
+    "market.macro",
+    "investment.research",
+    "data.sources",
+    "council.calibration",
+    "decision.follow_up",
     "general_question",
     "clarify",
 ]
@@ -72,8 +84,15 @@ class Entities(Strict):
     side: Literal["buy", "sell"] | None = None
     decision_type: Literal["investment", "purchase", "health", "career", "other"] | None = None
     satisfaction: int | None = Field(default=None, ge=0, le=100)
+    actual_action: str | None = None
+    result_amount: str | None = None
     memory_key: str | None = None
     memory_value: str | None = None
+    analysis_depth: Literal["fast", "deep"] | None = None
+    priority: Literal["low", "medium", "high", "critical"] | None = None
+    status: Literal["todo", "in_progress", "blocked", "done", "cancelled"] | None = None
+    project: str | None = None
+    estimated_minutes: int | None = Field(default=None, ge=1, le=10080)
 
 
 class IntentResult(Strict):

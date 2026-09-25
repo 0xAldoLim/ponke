@@ -37,6 +37,7 @@ pytest-asyncio==1.4.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
 python-telegram-bot==22.8
+pypdf==6.19.0
 respx==0.23.1
 ruff==0.16.7
 six==1.17.0

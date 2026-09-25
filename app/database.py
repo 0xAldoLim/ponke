@@ -181,6 +181,8 @@ class DecisionOutcome(Owned, Base):
     decision_id: Mapped[str] = mapped_column(ForeignKey("decisions.id"))
     outcome_description: Mapped[str] = mapped_column(Text)
     measurable_result: Mapped[Decimal | None] = mapped_column(Numeric(24, 4))
+    result_currency: Mapped[str | None] = mapped_column(String(3))
+    user_action: Mapped[str | None] = mapped_column(String(250))
     user_satisfaction: Mapped[int | None] = mapped_column(Integer)
 
 
@@ -230,6 +232,60 @@ class Inbound(Owned, Base):
     message_key: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20), default="processing")
     reply: Mapped[str | None] = mapped_column(Text)
+
+
+class MarketCache(Base):
+    __tablename__ = "market_cache"
+    __table_args__ = (UniqueConstraint("provider", "cache_key"),)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=uid)
+    provider: Mapped[str] = mapped_column(String(60))
+    cache_key: Mapped[str] = mapped_column(String(200))
+    payload: Mapped[dict] = mapped_column(JSON)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class Project(Owned, Base):
+    __tablename__ = "projects"
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
+    name: Mapped[str] = mapped_column(String(150))
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="active")
+
+
+class Task(Owned, Base):
+    __tablename__ = "tasks"
+    title: Mapped[str] = mapped_column(String(250))
+    description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default="todo")
+    priority: Mapped[str] = mapped_column(String(20), default="medium")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"))
+    estimated_minutes: Mapped[int | None] = mapped_column(Integer)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StatementImport(Owned, Base):
+    __tablename__ = "statement_imports"
+    file_hash: Mapped[str] = mapped_column(String(64), index=True)
+    filename: Mapped[str] = mapped_column(String(250))
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
+    status: Mapped[str] = mapped_column(String(20), default="preview")
+    rows: Mapped[dict] = mapped_column(JSON)
+    imported_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class SpreadsheetSyncOutbox(Owned, Base):
+    __tablename__ = "spreadsheet_sync_outbox"
+    __table_args__ = (UniqueConstraint("user_id", "entity_type", "entity_id", "operation"),)
+    entity_type: Mapped[str] = mapped_column(String(40))
+    entity_id: Mapped[str] = mapped_column(String(32))
+    operation: Mapped[str] = mapped_column(String(20))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    last_error: Mapped[str] = mapped_column(Text, default="")
 
 
 def make_database(url: str):
