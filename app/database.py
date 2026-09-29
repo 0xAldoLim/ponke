@@ -122,6 +122,8 @@ class Asset(Owned, Base):
     __tablename__ = "assets"
     __table_args__ = (UniqueConstraint("user_id", "symbol"),)
     symbol: Mapped[str] = mapped_column(String(30))
+    exchange: Mapped[str | None] = mapped_column(String(30))
+    provider_symbol: Mapped[str | None] = mapped_column(String(40))
     name: Mapped[str] = mapped_column(String(150))
     asset_type: Mapped[str] = mapped_column(String(30))
     currency: Mapped[str] = mapped_column(String(3))
@@ -286,6 +288,7 @@ class SpreadsheetSyncOutbox(Owned, Base):
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     last_error: Mapped[str] = mapped_column(Text, default="")
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 def make_database(url: str):

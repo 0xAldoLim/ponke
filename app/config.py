@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     default_currency: str = "IDR"
     daily_briefing_enabled: bool = True
     daily_briefing_time: str = "07:00"
-    daily_briefing_sections: str = "today,reminders,finance,notable,priorities"
+    daily_briefing_sections: str = "today,reminders,tasks,finance,notable,priorities"
     max_upload_bytes: int = 10_000_000
     requests_per_minute: int = 12
     large_transaction_threshold: Decimal = Decimal("10000000")

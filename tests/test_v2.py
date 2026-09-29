@@ -27,8 +27,8 @@ from app.statements import parse_statement
 from app.voice import preference_correction, voice_instruction
 
 
-def test_common_indonesian_ticker_is_resolved_to_idx_listing():
-    assert normalized_symbol("BBCA") == "BBCA.JK"
+def test_symbol_syntax_does_not_guess_exchange():
+    assert normalized_symbol("BBCA") == "BBCA"
     assert normalized_symbol("BBCA.JK") == "BBCA.JK"
 
 

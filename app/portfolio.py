@@ -62,6 +62,8 @@ async def portfolio_snapshot(db, user_id):
         holdings.append(
             {
                 "symbol": asset.symbol,
+                "exchange": asset.exchange,
+                "provider_symbol": asset.provider_symbol or asset.symbol,
                 "quantity": str(holding.quantity),
                 "currency": asset.currency,
                 "value": str(value) if value is not None else None,
@@ -112,19 +114,49 @@ async def update_portfolio(db, user_id, intent, entities, source):
     if not e.symbol:
         raise Clarification("Which asset symbol?")
     symbol = e.symbol.upper().strip()
-    asset = await db.scalar(select(Asset).where(Asset.user_id == user_id, Asset.symbol == symbol))
+    if e.exchange == "IDX" and not symbol.endswith(".JK"):
+        provider_symbol = symbol + ".JK"
+    else:
+        provider_symbol = symbol
+    exact = await db.scalar(select(Asset).where(Asset.user_id == user_id, Asset.symbol == symbol))
+    by_provider = await db.scalar(
+        select(Asset).where(Asset.user_id == user_id, Asset.provider_symbol == provider_symbol)
+    )
+    if exact and by_provider and exact.id != by_provider.id:
+        raise Clarification(
+            "Two saved listings share this ticker. Specify the exact exchange-qualified symbol."
+        )
+    if not e.exchange and "." not in symbol:
+        idx_asset = await db.scalar(
+            select(Asset).where(Asset.user_id == user_id, Asset.provider_symbol == symbol + ".JK")
+        )
+        if exact and idx_asset and exact.id != idx_asset.id:
+            raise Clarification("Two saved listings share this ticker. Specify the exchange.")
+    asset = by_provider or exact
+    if asset and e.exchange and asset.exchange not in (None, e.exchange):
+        raise Clarification("That saved asset belongs to another exchange. Use its exact listing symbol.")
+    if asset and e.exchange == "IDX" and asset.asset_type == "stock" and asset.currency != "IDR":
+        raise Clarification(
+            "The saved asset currency conflicts with an IDX listing. Check the asset identity."
+        )
     if not asset:
         if not e.currency or not e.asset_type:
             raise Clarification("For a new asset, include its currency and type.")
+        if e.asset_type == "stock" and not (e.exchange or symbol.endswith(".JK")):
+            raise Clarification("Which exchange is this stock on? Say IDX, NASDAQ, or NYSE.")
         asset = Asset(
             user_id=user_id,
             symbol=symbol,
             name=e.title or symbol,
             asset_type=e.asset_type,
             currency=e.currency.upper(),
+            exchange=e.exchange or ("IDX" if symbol.endswith(".JK") else None),
+            provider_symbol=provider_symbol,
         )
         db.add(asset)
         await db.flush()
+    elif e.exchange:
+        asset.exchange, asset.provider_symbol = e.exchange, provider_symbol
     if intent == "portfolio.price":
         asset.manual_price = money(e.price or e.amount or "", asset.currency)
         asset.price_as_of = utcnow()

@@ -4,7 +4,7 @@ from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, Field
 
-from app.market import CryptoProvider, normalized_symbol
+from app.market import CryptoProvider, NormalizedFundamentals, normalized_symbol, resolve_equity_symbol
 from app.portfolio import portfolio_snapshot
 
 
@@ -36,7 +36,7 @@ def cagr(first, last, years):
 def valuation(fundamentals, historical=None):
     historical = historical or {}
     result = {}
-    eps = fundamentals.get("eps")
+    eps = fundamentals.get("eps_ttm", fundamentals.get("eps"))
     for key in ("pe", "pb", "ev_ebitda", "fcf_yield", "dividend_yield"):
         value = fundamentals.get(key)
         if key == "pe" and eps is not None and Decimal(str(eps)) <= 0:
@@ -116,24 +116,39 @@ def purchase_scenario(portfolio, symbol, currency, amount):
     amount = Decimal(str(amount))
     rows = [h for h in portfolio["holdings"] if h["currency"] == currency]
     total = sum((Decimal(h["value"]) for h in rows if h["value"] is not None), Decimal(0))
-    position = sum(
-        (Decimal(h["value"]) for h in rows if h["symbol"] == symbol and h["value"] is not None), Decimal(0)
-    )
+    target_rows = [h for h in rows if symbol in {h["symbol"], h.get("provider_symbol")}]
+    position = sum((Decimal(h["value"]) for h in target_rows if h["value"] is not None), Decimal(0))
     missing = [h["symbol"] for h in rows if h["value"] is None]
+    target_missing = any(h["value"] is None for h in target_rows)
+    complete = not missing
     cash = portfolio["available_cash_snapshots"].get(currency)
+    cash_value = Decimal(str(cash)) if cash is not None else None
+    known_before = str(position) if not target_missing else None
+    known_after = str(position + amount) if not target_missing else None
+    before_pct = str(position / total * 100) if total and not target_missing else None
+    after_pct = (
+        str((position + amount) / (total + amount) * 100) if total + amount and not target_missing else None
+    )
     return {
         "currency": currency,
         "amount": str(amount),
-        "position_before": str(position) if not missing else None,
-        "position_after": str(position + amount) if not missing else None,
-        "concentration_before_percent": str(position / total * 100) if total and not missing else None,
-        "concentration_after_percent": str((position + amount) / (total + amount) * 100)
-        if total + amount and not missing
-        else None,
-        "cash_remaining": str(Decimal(str(cash)) - amount) if cash is not None else None,
-        "cash_snapshot_complete": cash is not None and not portfolio["unknown_cash_accounts"],
+        "position_before": known_before,
+        "position_after": known_after,
+        "position_before_known": known_before,
+        "position_after_known": known_after,
+        "known_portfolio_value_before": str(total),
+        "known_portfolio_value_after": str(total + amount),
+        "known_concentration_before": before_pct,
+        "known_concentration_after": after_pct,
+        "concentration_before_percent": before_pct if complete else None,
+        "concentration_after_percent": after_pct if complete else None,
+        "true_total_concentration_known": complete,
+        "cash_remaining": str(cash_value - amount) if cash_value is not None else None,
+        "cash_shortfall": str(max(amount - cash_value, Decimal(0))) if cash_value is not None else None,
+        "affordable_from_recorded_cash": cash_value >= amount if cash_value is not None else None,
+        "cash_snapshot_complete": cash_value is not None and not portfolio["unknown_cash_accounts"],
         "missing_prices": missing,
-        "note": "Scenario only; no trade was placed. Portfolio concentration uses same-currency recorded holdings. Cash snapshots may be incomplete.",
+        "note": "Scenario only; no trade was placed. Known concentration uses priced same-currency holdings only; it is not the true portfolio concentration when prices are missing. Cash snapshots may be incomplete.",
     }
 
 
@@ -146,54 +161,92 @@ async def research(
     purchase_amount=None,
     purchase_currency=None,
     include_history=False,
+    context=None,
 ):
-    symbol = normalized_symbol(symbol)
-    if asset_type == "stock" and symbol in CryptoProvider.ids:
+    lookup_symbol = symbol
+    if asset_type == "stock" and symbol.strip().upper() in CryptoProvider.ids:
         asset_type = "crypto"
+    if asset_type == "stock":
+        identity = await resolve_equity_symbol(db, user_id, symbol, context)
+        symbol = identity.canonical_symbol
+    else:
+        symbol = normalized_symbol(symbol)
     result = InvestmentResearchResult(symbol=symbol, asset_type=asset_type)
     kind = "crypto" if asset_type == "crypto" else "equity"
     try:
-        result.market_data = await market.get(db, user_id, kind, symbol)
-        result.sources.append({k: result.market_data.get(k) for k in ("source", "as_of", "freshness")})
+        result.market_data = await market.get(db, user_id, kind, lookup_symbol, context=context)
+        result.sources.append(
+            {
+                k: result.market_data.get(k)
+                for k in (
+                    "source",
+                    "as_of",
+                    "fetched_at",
+                    "freshness",
+                    "stale",
+                    "canonical_symbol",
+                    "provider_symbol",
+                    "exchange",
+                )
+            }
+        )
     except Exception:
         result.missing_data.append("verified quote")
     if asset_type == "stock":
         try:
-            result.fundamentals = await market.get(db, user_id, "fundamentals", symbol)
-            result.sources.append({k: result.fundamentals.get(k) for k in ("source", "as_of", "freshness")})
+            result.fundamentals = await market.get(
+                db, user_id, "fundamentals", lookup_symbol, context=context
+            )
+            result.sources.append(
+                {
+                    k: result.fundamentals.get(k)
+                    for k in (
+                        "source",
+                        "as_of",
+                        "fetched_at",
+                        "freshness",
+                        "stale",
+                        "canonical_symbol",
+                        "provider_symbol",
+                        "exchange",
+                    )
+                }
+            )
         except Exception:
             result.missing_data.append("verified fundamentals")
-        required = (
-            "revenue",
-            "revenue_growth_yoy",
-            "net_income",
-            "earnings_growth_yoy",
-            "eps",
-            "operating_margin",
-            "profit_margin",
-            "free_cash_flow",
-            "debt",
-            "cash",
-            "return_on_equity",
-            "return_on_assets",
-            "roic",
-            "pe",
-            "pb",
-            "ev_ebitda",
-            "dividend_yield",
-            "shares_outstanding",
-            "market_cap",
-        )
+        required = tuple(NormalizedFundamentals.model_fields)
         if include_history:
             try:
-                statements = await market.get(db, user_id, "statements", symbol)
+                statements = await market.get(db, user_id, "statements", lookup_symbol, context=context)
                 latest, direction = statement_metrics(statements)
-                result.fundamentals.update({key: value for key, value in latest.items() if value is not None})
+                result.fundamentals.update(
+                    {
+                        key + "_latest_annual"
+                        if key in {"revenue", "net_income", "free_cash_flow"}
+                        else key: value
+                        for key, value in latest.items()
+                        if value is not None
+                    }
+                )
                 result.fundamentals["trends"] = direction
-                result.sources.append({k: statements.get(k) for k in ("source", "as_of", "freshness")})
+                result.sources.append(
+                    {
+                        k: statements.get(k)
+                        for k in (
+                            "source",
+                            "as_of",
+                            "fetched_at",
+                            "freshness",
+                            "stale",
+                            "canonical_symbol",
+                            "provider_symbol",
+                            "exchange",
+                        )
+                    }
+                )
             except Exception:
                 result.missing_data.append("annual financial statements")
-        fcf, cap = result.fundamentals.get("free_cash_flow"), result.fundamentals.get("market_cap")
+        fcf, cap = result.fundamentals.get("free_cash_flow_ttm"), result.fundamentals.get("market_cap")
         if fcf is not None and cap is not None and Decimal(str(cap)) > 0:
             result.fundamentals["fcf_yield"] = str(Decimal(str(fcf)) / Decimal(str(cap)))
         result.valuation = valuation(result.fundamentals)
@@ -236,7 +289,7 @@ async def research(
         currency = (
             purchase_currency
             or result.market_data.get("currency")
-            or ("IDR" if symbol.endswith(".JK") else "USD")
+            or ("IDR" if result.market_data.get("exchange") == "IDX" else "USD")
         )
         result.portfolio_context["purchase_scenario"] = purchase_scenario(
             portfolio, symbol, currency, purchase_amount

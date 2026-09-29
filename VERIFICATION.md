@@ -1,11 +1,16 @@
-# Verification record — Ponke V2, 25 September 2026
+# Verification record — Ponke audit, 29 September 2026
 
-- Full Python 3.12 suite against the isolated migrated PostgreSQL `ponke_test` database: **102 passed**. Fixtures use outer transactions/savepoints; no production records were used.
-- Ruff lint and format checks passed: `ruff check .` and `ruff format --check .` (run without cache on a read-only source mount).
-- Additive Alembic upgrades through `0003` succeeded on disposable PostgreSQL and SQLite. `alembic check` found no PostgreSQL schema drift.
+- The last complete Python 3.12 suite before this audit passed **102 tests** against isolated PostgreSQL `ponke_test`.
+- The final Python 3.12 suite against isolated PostgreSQL `ponke_test` passed **158 tests** after the audit fixes. Fixtures use outer transactions/savepoints; production rows were not used.
+- Additive Alembic upgrade through `0004` succeeded on isolated PostgreSQL `ponke_test`; `alembic current` returned `0004 (head)` and `alembic check` found no schema drift.
+- Ruff lint and format checks passed (`ruff check .`, `ruff format --check .`); all 42 Python files also parsed with the bundled Python runtime.
+- The final suite includes statement checks confirming `48.000` becomes 48000, mixed separators become 1250000.50, malformed values are held for review, and `Rp48.000` can supply IDR explicitly.
+- `docker compose build app migrate` completed successfully. A fresh binary PostgreSQL backup was saved at ignored `backups/ponke-pre-audit-20260929.dump` before the live migration; its `PGDMP` header was verified.
+- The app was stopped for the migration, `docker compose run --rm migrate` completed successfully, and the live database reported Alembic version `0004`. The app was restarted; `/health/ready` returned `{"status":"ready"}` and startup logs reported no errors.
+- GitHub Actions CI has not run for this audit change yet; its result must be checked after the push.
 - Live public market endpoint smoke checks from the local service environment returned a BTCUSDT Binance Spot quote and a dated USD/IDR Frankfurter reference rate. No trade endpoint was used.
-- A binary PostgreSQL backup was saved outside Git before local rollout. The existing database volume was not replaced.
+- The earlier V2 backup remains outside Git. The new audit backup is also ignored by Git.
 
-Automated coverage includes selective/deep council bounds, task lifecycle and user ownership, CSV/XLSX statement validation, preview and idempotent confirmation, market cache freshness/stale behavior, deterministic research calculations, outcome recording, Sheets upsert/retry behavior, unapproved-user Telegram onboarding, and regression tests for the original MVP.
+The new regression file covers money formats, malformed rows, IDX resolution, incomplete portfolio and cash scenarios, statement review and three timezones, partial fundamentals, default briefing tasks, priority scoring, deep-request detection, Sheets mutation/retry behavior and sparse analyst samples. Existing tests cover the original MVP and V2 flows.
 
-These tests use controlled model and Google responses. They do not prove live Gemini interpretation, Google OAuth/Sheets authorization, real bank PDF extraction accuracy, provider coverage for a particular Indonesian ticker, or Telegram delivery from the user's account. Those require the live A–K acceptance prompts in [README.md](README.md). Credentials remain in ignored `.env`; none are committed.
+These tests use controlled model and Google responses. They do not prove live Gemini interpretation, Google OAuth/Sheets authorization, real bank PDF extraction accuracy, provider coverage for a particular Indonesian ticker, or Telegram delivery from the user's account. Credentials remain in ignored `.env`; none are committed.

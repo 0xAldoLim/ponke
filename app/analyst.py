@@ -10,6 +10,66 @@ from app.reminders import list_reminders
 from app.tasks import OPEN, priority_score
 from app.validation import aware, cash
 
+MIN_CATEGORY_MONTHS = 3
+MIN_TASK_TIMING = 10
+MIN_DECISION_CATEGORY = 5
+MIN_CALIBRATION = 20
+MIN_CROSS_DOMAIN_PERIODS = 8
+
+
+async def cross_domain_periods(db, user_id, timezone, months=12):
+    """Owned monthly counts for future analysis; makes no correlation claim."""
+    start = month_range(utcnow(), timezone, -months)[0]
+    buckets = {}
+
+    def add(timestamp, field):
+        key = aware(timestamp).astimezone(ZoneInfo(timezone)).strftime("%Y-%m")
+        bucket = buckets.setdefault(
+            key, {"calendar": 0, "spending": 0, "tasks": 0, "decisions": 0, "research": 0}
+        )
+        bucket[field] += 1
+
+    for timestamp in (
+        await db.scalars(
+            select(Transaction.date).where(
+                Transaction.user_id == user_id,
+                Transaction.transaction_type == "expense",
+                Transaction.date >= start,
+            )
+        )
+    ).all():
+        add(timestamp, "spending")
+    for timestamp in (
+        await db.scalars(
+            select(Task.completed_at).where(
+                Task.user_id == user_id, Task.completed_at.is_not(None), Task.completed_at >= start
+            )
+        )
+    ).all():
+        add(timestamp, "tasks")
+    for timestamp in (
+        await db.scalars(
+            select(DecisionOutcome.created_at).where(
+                DecisionOutcome.user_id == user_id, DecisionOutcome.created_at >= start
+            )
+        )
+    ).all():
+        add(timestamp, "decisions")
+    for kind, timestamp in (
+        await db.execute(
+            select(Activity.kind, Activity.created_at).where(
+                Activity.user_id == user_id,
+                Activity.created_at >= start,
+                Activity.kind.in_(("calendar.create", "calendar.modify", "calendar.delete", "market.lookup")),
+            )
+        )
+    ).all():
+        add(timestamp, "research" if kind == "market.lookup" else "calendar")
+    return {
+        "periods": dict(sorted(buckets.items())),
+        "enough_periods_for_correlation": len(buckets) >= MIN_CROSS_DOMAIN_PERIODS,
+    }
+
 
 def evidence_insights(context):
     lines = []
@@ -18,7 +78,7 @@ def evidence_insights(context):
         lines.append("FACT: Recorded spending this month: " + cash(values["expense"], currency) + ".")
         avg = context["recorded_monthly_average"].get(currency)
         n = context["average_sample_months"].get(currency, 0)
-        if avg and n >= 3 and values["expense"] > avg:
+        if avg and n >= MIN_CATEGORY_MONTHS and values["expense"] > avg:
             change = (values["expense"] - avg) / avg * 100
             lines.append(
                 f"FACT: Partial-month spending is {change:.1f}% above the average of {n} recorded complete months ({currency})."
@@ -56,7 +116,7 @@ async def personal_analysis(db, user_id, settings):
     for (category, currency), months in category_months.items() if len(expenses) < 5000 else []:
         previous = [amount for month, amount in months.items() if month != current_month]
         current = months.get(current_month)
-        if current is not None and len(previous) == 3 and sum(previous) > 0:
+        if current is not None and len(previous) == MIN_CATEGORY_MONTHS and sum(previous) > 0:
             average = sum(previous) / 3
             if current > average * Decimal("1.2"):
                 lines.append(
@@ -116,7 +176,7 @@ async def personal_analysis(db, user_id, settings):
                 and decisions.get(o.decision_id)
                 and decisions[o.decision_id].decision_type == category
             ]
-            if len(rated) >= 3:
+            if len(rated) >= MIN_DECISION_CATEGORY:
                 lines.append(
                     f"FACT: {category} decisions have average reported satisfaction {sum(rated) / len(rated):.0f}/100 across {len(rated)} outcomes. This is descriptive, not a recommendation score."
                 )
@@ -159,7 +219,7 @@ async def personal_analysis(db, user_id, settings):
             for task in completed
             if task.completed_at and task.due_at
         ]
-        if len(delays) >= 5:
+        if len(delays) >= MIN_TASK_TIMING:
             lines.append(
                 f"FACT: {sum(delay > 0 for delay in delays)} of {len(delays)} completed tasks with deadlines finished after their due date."
             )
@@ -174,8 +234,8 @@ async def calibration_report(db, user_id):
             .limit(500)
         )
     ).all()
-    if len(outcomes) < 20:
-        return f"There isn't enough outcome data for calibration yet ({len(outcomes)}/20 rated outcomes). No council weights have changed."
+    if len(outcomes) < MIN_CALIBRATION:
+        return f"There isn't enough outcome data for calibration yet ({len(outcomes)}/{MIN_CALIBRATION} rated outcomes). No council weights have changed."
     ids = [row.decision_id for row in outcomes]
     opinions = (await db.scalars(select(AgentOpinion).where(AgentOpinion.decision_id.in_(ids)))).all()
     roles = {row.decision_id: set() for row in outcomes}

@@ -5,9 +5,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Protocol
 
 import httpx
-from sqlalchemy import select
+from pydantic import BaseModel
+from sqlalchemy import or_, select
 
-from app.database import Asset, MarketCache, utcnow
+from app.database import Activity, Asset, MarketCache, utcnow
 from app.validation import Clarification, aware
 
 
@@ -21,34 +22,240 @@ def number(value):
 
 
 def normalized_symbol(symbol):
-    value = symbol.strip().upper().replace("IDX:", "").replace("NASDAQ:", "")
+    value = symbol.strip().upper()
     if not value or len(value) > 30 or not all(c.isalnum() or c in ".-_" for c in value):
         raise Clarification("Give me a valid ticker or currency pair.")
-    if value in {
-        "BBCA",
-        "BBRI",
-        "BMRI",
-        "BBNI",
-        "TLKM",
-        "ASII",
-        "UNVR",
-        "GOTO",
-        "ICBP",
-        "INDF",
-        "ANTM",
-        "ADRO",
-        "PTBA",
-        "MDKA",
-        "AMRT",
-    }:
-        value += ".JK"
     return value
+
+
+class ResolvedSymbol(BaseModel):
+    raw_symbol: str
+    canonical_symbol: str
+    provider_symbol: str
+    exchange: str | None = None
+    asset_type: str | None = None
+    resolution_source: str
+
+
+def indonesian_market_context(text):
+    words = (text or "").casefold()
+    return any(
+        marker in words
+        for marker in (
+            "idx",
+            "ihsg",
+            "indonesian stock",
+            "indonesia stock",
+            "indonesian exchange",
+            "indonesia exchange",
+            "indonesian equities",
+            "jakarta stock",
+            "bursa efek indonesia",
+            "saham indonesia",
+            "saham idx",
+        )
+    )
+
+
+def canonical_macro_series(raw_key, context=None):
+    value = raw_key.strip().upper()
+    words = (context or "").casefold()
+    if "bi rate" in words or ("bank indonesia" in words and "rate" in words) or value == "BI_RATE":
+        return "ID_BI_RATE"
+    if ("indonesia" in words or "indonesian" in words) and ("cpi" in words or "inflation" in words):
+        return "ID_CPI"
+    return value
+
+
+async def resolve_equity_symbol(db, user_id, raw_symbol, context=None):
+    raw = raw_symbol.strip().upper()
+    prefix, marker, code = raw.partition(":")
+    if marker:
+        if prefix not in {"IDX", "NASDAQ", "NYSE", "US"}:
+            raise Clarification("Specify a supported exchange such as IDX:BYAN or NASDAQ:AAPL.")
+        symbol = normalized_symbol(code)
+        exchange = "IDX" if prefix == "IDX" else prefix
+        if (exchange == "IDX" and "." in symbol and not symbol.endswith(".JK")) or (
+            exchange != "IDX" and symbol.endswith(".JK")
+        ):
+            raise Clarification("The ticker suffix conflicts with the stated exchange.")
+        provider_symbol = symbol + ".JK" if exchange == "IDX" and not symbol.endswith(".JK") else symbol
+        return ResolvedSymbol(
+            raw_symbol=raw,
+            canonical_symbol=symbol,
+            provider_symbol=provider_symbol,
+            exchange=exchange,
+            asset_type="stock",
+            resolution_source="explicit_exchange",
+        )
+    symbol = normalized_symbol(raw)
+    exact = await db.scalar(select(Asset).where(Asset.user_id == user_id, Asset.symbol == symbol))
+    by_provider = await db.scalar(
+        select(Asset).where(Asset.user_id == user_id, Asset.provider_symbol == symbol)
+    )
+    if exact and by_provider and exact.id != by_provider.id:
+        raise Clarification("You have more than one listing for that ticker. Specify the exchange.")
+    asset = exact or by_provider
+    if "." not in symbol:
+        idx_asset = await db.scalar(
+            select(Asset).where(
+                Asset.user_id == user_id,
+                or_(Asset.symbol == symbol + ".JK", Asset.provider_symbol == symbol + ".JK"),
+            )
+        )
+        if asset and idx_asset and asset.id != idx_asset.id:
+            raise Clarification("You have more than one listing for that ticker. Specify the exchange.")
+        asset = asset or idx_asset
+    if not asset and symbol.endswith(".JK"):
+        asset = await db.scalar(
+            select(Asset).where(
+                Asset.user_id == user_id,
+                Asset.symbol == symbol.removesuffix(".JK"),
+                Asset.asset_type == "stock",
+                or_(Asset.exchange == "IDX", Asset.currency == "IDR"),
+            )
+        )
+    if asset:
+        exchange = asset.exchange or ("IDX" if asset.symbol.endswith(".JK") else None)
+        provider_symbol = asset.provider_symbol or asset.symbol
+        if exchange == "IDX" and not provider_symbol.endswith(".JK"):
+            provider_symbol = asset.symbol.removesuffix(".JK") + ".JK"
+        elif (
+            not exchange
+            and asset.asset_type == "stock"
+            and asset.currency == "IDR"
+            and "." not in provider_symbol
+        ):
+            exchange, provider_symbol = "IDX", asset.symbol + ".JK"
+        return ResolvedSymbol(
+            raw_symbol=raw,
+            canonical_symbol=asset.symbol,
+            provider_symbol=provider_symbol,
+            exchange=exchange,
+            asset_type=asset.asset_type,
+            resolution_source="user_asset",
+        )
+    if symbol.endswith(".JK"):
+        return ResolvedSymbol(
+            raw_symbol=raw,
+            canonical_symbol=symbol,
+            provider_symbol=symbol,
+            exchange="IDX",
+            asset_type="stock",
+            resolution_source="explicit_suffix",
+        )
+    if "." in symbol:
+        return ResolvedSymbol(
+            raw_symbol=raw,
+            canonical_symbol=symbol,
+            provider_symbol=symbol,
+            asset_type="stock",
+            resolution_source="explicit_suffix",
+        )
+    if indonesian_market_context(context):
+        return ResolvedSymbol(
+            raw_symbol=raw,
+            canonical_symbol=symbol,
+            provider_symbol=symbol + ".JK",
+            exchange="IDX",
+            asset_type="stock",
+            resolution_source="market_context",
+        )
+    raise Clarification(
+        "Which exchange is this stock on? Use IDX:BYAN or NASDAQ:AAPL, or give the .JK ticker."
+    )
 
 
 class MarketProvider(Protocol):
     name: str
 
     async def fetch(self, kind: str, key: str) -> dict: ...
+
+
+class EquityMarketProvider(Protocol):
+    name: str
+    supported_exchanges: set[str]
+
+    async def fetch(self, kind: str, key: str) -> dict: ...
+
+
+class NormalizedFundamentals(BaseModel):
+    revenue_ttm: Decimal | None = None
+    revenue_growth_yoy: Decimal | None = None
+    net_income_ttm: Decimal | None = None
+    earnings_growth_yoy: Decimal | None = None
+    eps_ttm: Decimal | None = None
+    gross_profit_ttm: Decimal | None = None
+    ebitda_ttm: Decimal | None = None
+    operating_margin: Decimal | None = None
+    profit_margin: Decimal | None = None
+    free_cash_flow_ttm: Decimal | None = None
+    debt: Decimal | None = None
+    cash: Decimal | None = None
+    return_on_equity: Decimal | None = None
+    return_on_assets: Decimal | None = None
+    roic: Decimal | None = None
+    pe: Decimal | None = None
+    pb: Decimal | None = None
+    ev_ebitda: Decimal | None = None
+    dividend_yield: Decimal | None = None
+    shares_outstanding: Decimal | None = None
+    market_cap: Decimal | None = None
+
+
+class AlphaVantageAdapter:
+    overview_fields = {
+        "revenue_ttm": "RevenueTTM",
+        "revenue_growth_yoy": "QuarterlyRevenueGrowthYOY",
+        "net_income_ttm": "NetIncomeTTM",
+        "earnings_growth_yoy": "QuarterlyEarningsGrowthYOY",
+        "eps_ttm": "EPS",
+        "gross_profit_ttm": "GrossProfitTTM",
+        "ebitda_ttm": "EBITDA",
+        "operating_margin": "OperatingMarginTTM",
+        "profit_margin": "ProfitMargin",
+        "free_cash_flow_ttm": "FreeCashFlowTTM",
+        "debt": "TotalDebt",
+        "cash": "CashAndCashEquivalents",
+        "return_on_equity": "ReturnOnEquityTTM",
+        "return_on_assets": "ReturnOnAssetsTTM",
+        "roic": "ReturnOnInvestedCapitalTTM",
+        "pe": "PERatio",
+        "pb": "PriceToBookRatio",
+        "ev_ebitda": "EVToEBITDA",
+        "dividend_yield": "DividendYield",
+        "shares_outstanding": "SharesOutstanding",
+        "market_cap": "MarketCapitalization",
+    }
+
+    @classmethod
+    def fundamentals(cls, data):
+        normalized = NormalizedFundamentals(
+            **{
+                field: number(data.get(provider_field))
+                for field, provider_field in cls.overview_fields.items()
+            }
+        )
+        return normalized.model_dump(mode="json")
+
+
+def normalize_fundamentals_payload(data):
+    """Adapt legacy cached names as well as new provider-neutral fields."""
+    aliases = {
+        "revenue": "revenue_ttm",
+        "net_income": "net_income_ttm",
+        "eps": "eps_ttm",
+        "ebitda": "ebitda_ttm",
+        "free_cash_flow": "free_cash_flow_ttm",
+    }
+    prepared = dict(data)
+    for old, new in aliases.items():
+        if prepared.get(new) is None and prepared.get(old) is not None:
+            prepared[new] = prepared[old]
+    normalized = NormalizedFundamentals(
+        **{field: prepared.get(field) for field in NormalizedFundamentals.model_fields}
+    ).model_dump(mode="json")
+    return {**prepared, **normalized}
 
 
 class CryptoProvider:
@@ -152,6 +359,7 @@ class CryptoProvider:
 
 class EquityProvider:
     name = "Alpha Vantage"
+    supported_exchanges = {"IDX", "NASDAQ", "NYSE", "US"}
 
     def __init__(self, client, key):
         self.client, self.key = client, key
@@ -220,22 +428,8 @@ class EquityProvider:
                 "name": data.get("Name"),
                 "sector": data.get("Sector"),
                 "currency": data.get("Currency"),
-                "market_cap": number(data.get("MarketCapitalization")),
-                "pe": number(data.get("PERatio")),
-                "pb": number(data.get("PriceToBookRatio")),
-                "ev_ebitda": number(data.get("EVToEBITDA")),
-                "eps": number(data.get("EPS")),
-                "shares_outstanding": number(data.get("SharesOutstanding")),
-                "revenue_ttm": number(data.get("RevenueTTM")),
-                "revenue_growth_yoy": number(data.get("QuarterlyRevenueGrowthYOY")),
-                "earnings_growth_yoy": number(data.get("QuarterlyEarningsGrowthYOY")),
-                "gross_profit_ttm": number(data.get("GrossProfitTTM")),
-                "ebitda": number(data.get("EBITDA")),
-                "profit_margin": number(data.get("ProfitMargin")),
-                "operating_margin": number(data.get("OperatingMarginTTM")),
-                "return_on_equity": number(data.get("ReturnOnEquityTTM")),
-                "return_on_assets": number(data.get("ReturnOnAssetsTTM")),
-                "dividend_yield": number(data.get("DividendYield")),
+                **AlphaVantageAdapter.fundamentals(data),
+                "as_of": data.get("LatestQuarter"),
                 "source": self.name,
             }
         if kind == "history":
@@ -293,6 +487,7 @@ class FXProvider:
 class MacroProvider:
     name = "FRED"
     series = {
+        "US_FED_FUNDS": "FEDFUNDS",
         "FED_FUNDS": "FEDFUNDS",
         "US_CPI": "CPIAUCSL",
         "US_10Y": "DGS10",
@@ -357,8 +552,44 @@ class MarketService:
     async def close(self):
         await self.client.aclose()
 
-    async def get(self, db, user_id, kind, raw_key):
-        key = normalized_symbol(raw_key) if kind != "fx" else raw_key.upper().replace("-", "/")
+    @staticmethod
+    def record_lookup(db, user_id, data):
+        fields = (
+            "source",
+            "as_of",
+            "fetched_at",
+            "freshness",
+            "stale",
+            "canonical_symbol",
+            "provider_symbol",
+            "exchange",
+            "symbol",
+            "series",
+        )
+        db.add(Activity(user_id=user_id, kind="market.lookup", detail={key: data.get(key) for key in fields}))
+        return data
+
+    async def get(self, db, user_id, kind, raw_key, context=None):
+        if kind == "macro":
+            raw_key = canonical_macro_series(raw_key, context)
+        if kind == "macro" and raw_key.upper() in {"ID_BI_RATE", "ID_CPI"}:
+            raise Clarification(
+                f"{raw_key.upper()} is unavailable: no verified Indonesian macro provider is configured."
+            )
+        if kind == "macro" and raw_key.upper() == "USD_IDR":
+            return {**await self.get(db, user_id, "fx", "USD/IDR"), "series": "USD_IDR"}
+        identity = (
+            await resolve_equity_symbol(db, user_id, raw_key, context)
+            if kind in {"equity", "fundamentals", "history", "statements"}
+            else None
+        )
+        key = (
+            identity.provider_symbol
+            if identity
+            else normalized_symbol(raw_key)
+            if kind != "fx"
+            else raw_key.upper().replace("-", "/")
+        )
         if kind == "fx" and (
             len(key.split("/")) != 2 or not all(len(p) == 3 and p.isalpha() for p in key.split("/"))
         ):
@@ -378,19 +609,33 @@ class MarketService:
             )
         )
         if cached and aware(cached.expires_at) > utcnow():
-            return {
-                **cached.payload,
-                "freshness": "CACHED",
-                "fetched_at": aware(cached.fetched_at).isoformat(),
-                "stale": False,
-            }
+            return self.record_lookup(
+                db,
+                user_id,
+                {
+                    **(
+                        normalize_fundamentals_payload(cached.payload)
+                        if kind == "fundamentals"
+                        else cached.payload
+                    ),
+                    **(identity.model_dump() if identity else {}),
+                    "freshness": "CACHED",
+                    "fetched_at": aware(cached.fetched_at).isoformat(),
+                    "stale": False,
+                },
+            )
         try:
             data = await provider.fetch(kind, key)
+            if kind == "fundamentals":
+                data = normalize_fundamentals_payload(data)
+            if identity:
+                data = {**data, **identity.model_dump()}
+            fetched_at = utcnow()
             if cached:
                 cached.payload, cached.fetched_at, cached.expires_at = (
                     data,
-                    utcnow(),
-                    utcnow() + timedelta(seconds=self.TTL[kind]),
+                    fetched_at,
+                    fetched_at + timedelta(seconds=self.TTL[kind]),
                 )
             else:
                 db.add(
@@ -398,33 +643,64 @@ class MarketService:
                         provider=provider.name,
                         cache_key=f"{kind}:{key}",
                         payload=data,
-                        fetched_at=utcnow(),
-                        expires_at=utcnow() + timedelta(seconds=self.TTL[kind]),
+                        fetched_at=fetched_at,
+                        expires_at=fetched_at + timedelta(seconds=self.TTL[kind]),
                     )
                 )
-            return {**data, "freshness": "LIVE", "fetched_at": utcnow().isoformat(), "stale": False}
+            return self.record_lookup(
+                db,
+                user_id,
+                {**data, "freshness": "LIVE", "fetched_at": fetched_at.isoformat(), "stale": False},
+            )
         except (httpx.HTTPError, ValueError, Clarification) as exc:
             if cached:
-                return {
-                    **cached.payload,
-                    "freshness": "CACHED",
-                    "fetched_at": aware(cached.fetched_at).isoformat(),
-                    "stale": True,
-                    "warning": "Feed unavailable; this cached result may be stale.",
-                }
-            if kind in {"crypto", "equity"}:
-                asset = await db.scalar(select(Asset).where(Asset.user_id == user_id, Asset.symbol == key))
-                if asset and asset.manual_price is not None:
-                    return {
-                        "symbol": key,
-                        "price": str(asset.manual_price),
-                        "currency": asset.currency,
-                        "source": "USER",
-                        "freshness": "MANUAL",
-                        "as_of": aware(asset.price_as_of).isoformat() if asset.price_as_of else None,
+                return self.record_lookup(
+                    db,
+                    user_id,
+                    {
+                        **(
+                            normalize_fundamentals_payload(cached.payload)
+                            if kind == "fundamentals"
+                            else cached.payload
+                        ),
+                        **(identity.model_dump() if identity else {}),
+                        "freshness": "CACHED",
+                        "fetched_at": aware(cached.fetched_at).isoformat(),
                         "stale": True,
-                        "warning": "Manual price; no verified live quote.",
-                    }
+                        "warning": "Feed unavailable; this cached result may be stale.",
+                    },
+                )
+            if kind in {"crypto", "equity"}:
+                asset = await db.scalar(
+                    select(Asset).where(
+                        Asset.user_id == user_id,
+                        Asset.symbol == (identity.canonical_symbol if identity else key),
+                    )
+                )
+                if asset and identity and identity.resolution_source != "user_asset":
+                    asset_exchange = asset.exchange or (
+                        "IDX" if asset.asset_type == "stock" and asset.currency == "IDR" else None
+                    )
+                    if (
+                        asset.provider_symbol or asset.symbol
+                    ) != identity.provider_symbol and asset_exchange != identity.exchange:
+                        asset = None
+                if asset and asset.manual_price is not None:
+                    return self.record_lookup(
+                        db,
+                        user_id,
+                        {
+                            "symbol": identity.canonical_symbol if identity else key,
+                            **(identity.model_dump() if identity else {}),
+                            "price": str(asset.manual_price),
+                            "currency": asset.currency,
+                            "source": "USER",
+                            "freshness": "MANUAL",
+                            "as_of": aware(asset.price_as_of).isoformat() if asset.price_as_of else None,
+                            "stale": True,
+                            "warning": "Manual price; no verified live quote.",
+                        },
+                    )
             raise Clarification(
                 str(exc)
                 if isinstance(exc, Clarification)
@@ -436,9 +712,15 @@ def render_market(data):
     value = data.get("price") or data.get("rate") or data.get("value")
     unit = data.get("currency") or data.get("units") or ""
     lines = [
-        f"{data.get('symbol') or data.get('series')}: {value} {unit}".strip(),
+        f"{data.get('canonical_symbol') or data.get('symbol') or data.get('series')}: {value} {unit}".strip(),
         f"Source: {data.get('source')} ({data.get('freshness')}) · as of {data.get('as_of') or 'unknown'}",
     ]
+    if data.get("provider_symbol"):
+        lines.append(
+            f"Exchange: {data.get('exchange') or 'unverified'} · provider symbol: {data['provider_symbol']}"
+        )
+    if data.get("fetched_at"):
+        lines.append(f"Fetched: {data['fetched_at']} · stale: {'yes' if data.get('stale') else 'no'}")
     if data.get("change_24h_percent") is not None:
         lines.insert(1, f"24h: {data['change_24h_percent']}%")
     if data.get("warning"):

@@ -168,8 +168,8 @@ If you want to open the Google link directly on your phone, use a domain pointed
 5. Send `How much did I spend on food this month?` and `Export my finances.`
 6. Send `Should I spend IDR 1000000 on a laptop?` to try the selective council. Fast purchase mode uses two specialists and one synthesis call after routing. Explicit `deep council:` adds a bounded cross-review round and uses more of the free quota.
 7. Send `Finish internship report by Friday`, then `/tasks` and `Mark internship report done`.
-8. Upload a small CSV statement with `date,description,debit,credit,currency` columns, inspect the preview, then confirm. Check that sending the same file again is rejected as already imported.
-9. Send `What is BTC's price?` and check the source, currency, as-of date and freshness label. Public Binance Spot quotes use USDT pairs. Send `Analyze BBCA.JK`; missing fundamentals must be reported as missing, never invented.
+8. Upload a small CSV statement with `date,description,debit,credit,currency` columns, inspect the preview, then confirm. Verify `48.000` imports as 48,000 IDR. For unsigned or incomplete rows, send `/statement_review`, then `/review_statement 2 expense IDR 2026-09-14 48000` using the actual row number; Confirm imports only resolved ready rows. Check that sending the same file again is rejected as already imported. Statement dates use `USER_TIMEZONE`.
+9. Send `What is BTC's price?` and check source, currency, observation/fetch times and freshness. Public Binance Spot quotes use USDT pairs. Send `Analyze BBCA.JK` or `Analyze IDX:BYAN`; the provider symbol should end in `.JK`. A bare unknown stock symbol should ask for its exchange. Available fundamentals are retained and unavailable metrics stay missing.
 
 ## Optional V2 data sources and Sheets
 

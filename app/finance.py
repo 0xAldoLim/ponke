@@ -244,7 +244,7 @@ async def financial_context(db, user_id, settings):
                 Transaction.merchant != "",
             )
             .group_by(Transaction.merchant, Transaction.currency, Transaction.amount)
-            .having(func.count() >= 3)
+            .having(func.count() >= 4)
             .limit(20)
         )
     ).all()

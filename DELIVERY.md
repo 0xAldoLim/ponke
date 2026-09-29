@@ -6,10 +6,10 @@
 - Dedicated task/project lifecycle, priority ordering, briefing integration and decision follow-up delivery.
 - Fast selective council and explicit bounded deep mode. User-facing answers use the revised Ponke voice; stable communication corrections are saved per user.
 - Market providers for public Binance crypto, optional CoinGecko/Alpha Vantage/FRED and no-key Frankfurter FX, with cache, source/date and stale/manual fallback.
-- Normalized investment research and deterministic growth, valuation and portfolio scenario calculations. No brokerage or order API exists.
-- Conservative CSV/XLSX/text-PDF statement preview, duplicate matching, confirmation and idempotent commit.
-- Optional Google Sheets OAuth and six-tab incremental sync using a durable PostgreSQL outbox.
-- Additive `0002` and `0003` migrations preserve the initial schema and existing rows.
+- Provider-normalized fundamentals, exchange-aware IDX resolution, deterministic growth/valuation, known-subtotal portfolio scenarios and cash affordability. No brokerage or order API exists.
+- Strict Indonesian/international statement amount parsing, local-date storage, CSV/XLSX/text-PDF preview, per-row review, confirmation and idempotent commit.
+- Optional Google Sheets OAuth and six-tab incremental sync with a retry-observable PostgreSQL outbox.
+- Additive migrations through `0004` preserve existing symbols and rows; new Asset exchange/provider-symbol fields are nullable.
 
 ## Credentials and configuration
 
@@ -21,4 +21,4 @@ Back up PostgreSQL, then run `docker compose build`, `docker compose run --rm mi
 
 ## Known limits
 
-Provider quotas and symbol coverage vary. Alpha Vantage's free feed does not guarantee complete Indonesian fundamentals or historical financial statements; missing fields remain unknown. BI policy rates are not connected. PDF import covers extractable text, not scanned images. Unsigned statement amounts need review and are not auto-committed. Sheets does not backfill old rows automatically. Account balances are snapshots, not bank synchronization. Calendar availability is not yet incorporated into the task score. No automatic council reweighting or trade execution is provided.
+Provider quotas and symbol coverage vary. Alpha Vantage's free feed does not guarantee Indonesian quotes, fundamentals or historical financial statements; missing fields remain unknown. Bare ambiguous tickers require an exchange. BI policy rates and Indonesian CPI are not connected. PDF import covers extractable text, not scanned images. Uncertain statement rows need explicit correction or skip before import; malformed columns require a new file. Sheets does not backfill old rows automatically. Account balances are snapshots, not bank synchronization. Daily briefing uses calendar free minutes only when available. No automatic council reweighting or trade execution is provided.

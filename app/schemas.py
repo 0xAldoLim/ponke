@@ -77,6 +77,7 @@ class Entities(Strict):
     search: str | None = None
     format: Literal["xlsx", "csv"] | None = None
     symbol: str | None = None
+    exchange: Literal["IDX", "NASDAQ", "NYSE", "US"] | None = None
     asset_type: Literal["stock", "crypto", "deposit", "bond", "mutual_fund", "cash", "other"] | None = None
     quantity: str | None = None
     price: str | None = None

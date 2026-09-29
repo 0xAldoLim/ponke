@@ -185,7 +185,7 @@ class SheetsWorker:
                 await db.scalars(
                     select(SpreadsheetSyncOutbox)
                     .where(
-                        SpreadsheetSyncOutbox.status == "pending",
+                        SpreadsheetSyncOutbox.status.in_(("pending", "degraded")),
                         SpreadsheetSyncOutbox.next_attempt_at <= utcnow(),
                         SpreadsheetSyncOutbox.user_id.in_(self.settings.allowed_ids),
                     )
@@ -200,17 +200,25 @@ class SheetsWorker:
                 await self.ensure_tabs(event.user_id)
                 await self.upsert(event.user_id, tab, key, cells)
             except Exception as exc:
-                log.warning(
-                    "sheets_sync_failed", error_type=type(exc).__name__, entity_type=event.entity_type
-                )
                 async with self.sessions.begin() as db:
                     row = await db.get(SpreadsheetSyncOutbox, event.id)
                     row.attempts += 1
                     row.last_error = type(exc).__name__
+                    row.last_attempt_at = utcnow()
+                    row.status = "degraded" if row.attempts >= 8 else "pending"
                     row.next_attempt_at = utcnow() + timedelta(
-                        seconds=min(3600, 30 * 2 ** min(row.attempts, 7))
+                        seconds=21600
+                        if row.status == "degraded"
+                        else min(3600, 30 * 2 ** min(row.attempts, 7))
+                    )
+                    log.warning(
+                        "sheets_sync_failed",
+                        error_type=row.last_error,
+                        entity_type=row.entity_type,
+                        attempt_count=row.attempts,
+                        status=row.status,
                     )
             else:
                 async with self.sessions.begin() as db:
                     row = await db.get(SpreadsheetSyncOutbox, event.id)
-                    row.status, row.last_error = "done", ""
+                    row.status, row.last_error, row.last_attempt_at = "done", "", utcnow()
