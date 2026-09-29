@@ -7,7 +7,7 @@
 - The final suite includes statement checks confirming `48.000` becomes 48000, mixed separators become 1250000.50, malformed values are held for review, and `Rp48.000` can supply IDR explicitly.
 - `docker compose build app migrate` completed successfully. A fresh binary PostgreSQL backup was saved at ignored `backups/ponke-pre-audit-20260929.dump` before the live migration; its `PGDMP` header was verified.
 - The app was stopped for the migration, `docker compose run --rm migrate` completed successfully, and the live database reported Alembic version `0004`. The app was restarted; `/health/ready` returned `{"status":"ready"}` and startup logs reported no errors.
-- GitHub Actions CI has not run for this audit change yet; its result must be checked after the push.
+- GitHub Actions [CI run 36531883998](https://github.com/0xAldoLim/ponke/actions/runs/36531883998) for audit commit `ed18461` completed successfully, including lint, format, migration, tests, and Docker build.
 - Live public market endpoint smoke checks from the local service environment returned a BTCUSDT Binance Spot quote and a dated USD/IDR Frankfurter reference rate. No trade endpoint was used.
 - The earlier V2 backup remains outside Git. The new audit backup is also ignored by Git.
 
